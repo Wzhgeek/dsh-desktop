@@ -9,14 +9,16 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "pnpm --dir plugins/client run build && tsc -p tsconfig.json",
     "start": "electron .",
     "dev": "pnpm build && electron .",
+    "build:client": "pnpm --dir plugins/client run build",
     "smoke": "tsx src/smoke.ts",
     "render-smoke": "pnpm build && electron dist/render-smoke.js"
   },
   "license": "MIT",
   "dependencies": {
+    "@dsh-desktop/client": "link:plugins/client",
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/cordis-plugin-group": "^1.0.1",
     "@deepseek-ai/cordis-plugin-hmr": "^1.0.16",
@@ -80,6 +82,7 @@
     "js-yaml": "^4.2.0"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
     "@types/node": "^22.0.0",
     "electron": "^37.0.0",
     "tsx": "^4.0.0",

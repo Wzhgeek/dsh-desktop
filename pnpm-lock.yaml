@@ -185,6 +185,9 @@ importers:
       '@deepseek-ai/dsh-workflow-worker-thread':
         specifier: ^0.1.0-rc.5
         version: 0.1.0-rc.6(81e39639224582eac86842ae936978a5)
+      '@dsh-desktop/client':
+        specifier: link:plugins/client
+        version: link:plugins/client
       commander:
         specifier: ^15.0.0
         version: 15.0.0
@@ -192,6 +195,9 @@ importers:
         specifier: ^4.2.0
         version: 4.3.1
     devDependencies:
+      '@deepseek-ai/dsh-host-webserver':
+        specifier: ^0.1.0-rc.6
+        version: 0.1.0-rc.6(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.0-rc.6(@deepseek-ai/cordis@4.0.1))
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.1

@@ -17,9 +17,13 @@ void app.whenReady().then(async () => {
     const hasBoot = await win.webContents.executeJavaScript(
       'typeof window.__DSH_BOOT__ !== "undefined"',
     ) as boolean
+    const bootJson = await win.webContents.executeJavaScript(
+      'JSON.stringify(window.__DSH_BOOT__ ?? null)',
+    ) as string
     if (title !== 'DeepSeek Harness') throw new Error(`unexpected title: ${JSON.stringify(title)}`)
     if (!hasBoot) throw new Error('renderer received no window.__DSH_BOOT__ host injection')
-    console.log(`OK: rendered ${JSON.stringify(title)} with window.__DSH_BOOT__`)
+    if (!bootJson.includes('@dsh-desktop/client')) throw new Error('client-modules did not discover @dsh-desktop/client bundle')
+    console.log(`OK: rendered ${JSON.stringify(title)} with window.__DSH_BOOT__ (+ @dsh-desktop/client)`)
   } finally {
     await ctx.fiber.dispose()
     app.exit(0)

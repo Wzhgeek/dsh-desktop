@@ -27,6 +27,10 @@ import {
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import * as desktopHost from './host/desktop-host.ts'
+import * as appearanceHost from './host/appearance-host.ts'
+import * as usageHost from './host/usage-host.ts'
+import * as gitHost from './host/git-host.ts'
 
 /** Diagnostic prefix on load-failure errors. */
 const NAME = 'dsh-desktop'
@@ -63,9 +67,16 @@ export async function bootDesktopTree(onExit: (code: number) => void = () => {})
   const homePatches = loadOptionalPatches(NAME, join(resolveDshHome(), PROFILE_PATCH_FILENAME)) ?? []
   const bundlePatches = profile.layers.flatMap((layer) => layer.patches)
   const patches: PatchOptions[] = structuredClone([...bundlePatches, ...profile.patches, ...homePatches])
+  // Desktop overlay: the client plugin row lets client-modules discover and
+  // serve @dsh-desktop/client's browser bundle into the shell slot system.
+  patches.push({ insert: [{ id: 'desktop-client', name: '@dsh-desktop/client' }] })
   const rootConfig = join(profile.dir, PROFILE_ROOT_FILENAME)
   const ctx = await boot(NAME, rootConfig, patches, (hostCtx) => {
     hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, loadLayeredEnv(NAME))
+    hostCtx.plugin(desktopHost)
+    hostCtx.plugin(appearanceHost)
+    hostCtx.plugin(usageHost)
+    hostCtx.plugin(gitHost)
     provideCmdline(hostCtx, {
       // OS-assigned port; the SPA is loaded from the resulting loopback URL.
       args: ['--port', '0'],
