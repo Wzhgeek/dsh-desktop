@@ -12,12 +12,14 @@
  */
 
 import { writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import type { Context } from '@deepseek-ai/cordis'
 import {
   boot,
+  composeEntries,
   healProfilesModuleFallback,
   loadLayeredEnv,
   loadOptionalPatches,
@@ -31,12 +33,21 @@ import * as desktopHost from './host/desktop-host.ts'
 import * as appearanceHost from './host/appearance-host.ts'
 import * as usageHost from './host/usage-host.ts'
 import * as gitHost from './host/git-host.ts'
+import * as scheduleHost from './host/schedule-host.ts'
+import ElectronDirectoryPicker from './host/picker-host.ts'
 
 /** Diagnostic prefix on load-failure errors. */
 const NAME = 'dsh-desktop'
 
 /** This app's package.json, the first anchor bundle and preset resolution walks. */
 const INSTALL_ANCHOR = fileURLToPath(new URL('../package.json', import.meta.url))
+
+/** Official presets shipped with the dsh CLI package, matching `dsh web`. */
+const SHIPPED_PRESET_ROOT = join(
+  dirname(createRequire(INSTALL_ANCHOR).resolve('@deepseek-ai/dsh/package.json')),
+  'config',
+  'agent-presets',
+)
 
 /** The profile root config filename (the include root the Loader anchors on). */
 const PROFILE_ROOT_FILENAME = 'cordis.yml'
@@ -67,16 +78,55 @@ export async function bootDesktopTree(onExit: (code: number) => void = () => {})
   const homePatches = loadOptionalPatches(NAME, join(resolveDshHome(), PROFILE_PATCH_FILENAME)) ?? []
   const bundlePatches = profile.layers.flatMap((layer) => layer.patches)
   const patches: PatchOptions[] = structuredClone([...bundlePatches, ...profile.patches, ...homePatches])
+  // The web bundle declares the roster service, while the installed app owns
+  // the path to its shipped presets. Mirror the official dsh launcher overlay
+  // so a selected workspace can create its initial `standard` session.
+  const composedEntries = composeEntries([patches])
+  const agentPresets = composedEntries.find((entry) => entry.id === 'agent-presets')
+  if (agentPresets !== undefined) {
+    patches.push({
+      id: 'agent-presets',
+      config: {
+        ...agentPresets.config,
+        roots: [{ path: SHIPPED_PRESET_ROOT, trust: 'system' }],
+      },
+    })
+  }
+  // The shared web profile leaves FTS disabled for deployments that only need
+  // title search. Desktop's global palette promises message-content search, so
+  // defer opening the derived SQLite index until the first actual query.
+  const sessionQuery = composedEntries.find((entry) => entry.id === 'session-query-sqlite')
+  if (sessionQuery !== undefined) {
+    patches.push({
+      id: 'session-query-sqlite',
+      config: { ...sessionQuery.config, openAt: 'first-search' },
+    })
+  }
   // Desktop overlay: the client plugin row lets client-modules discover and
   // serve @dsh-desktop/client's browser bundle into the shell slot system.
   patches.push({ insert: [{ id: 'desktop-client', name: '@dsh-desktop/client' }] })
+  // Under Electron the shipped osascript/Zenity native picker is unreliable
+  // (macOS Automation permission); replace the adaptive backend with the
+  // Electron directory dialog instead.
+  if (process.versions.electron !== undefined) {
+    patches.push({ id: 'directory-picker', disabled: true })
+  }
   const rootConfig = join(profile.dir, PROFILE_ROOT_FILENAME)
-  const ctx = await boot(NAME, rootConfig, patches, (hostCtx) => {
+  const ctx = await boot(NAME, rootConfig, patches, async (hostCtx) => {
     hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, loadLayeredEnv(NAME))
     hostCtx.plugin(desktopHost)
     hostCtx.plugin(appearanceHost)
     hostCtx.plugin(usageHost)
     hostCtx.plugin(gitHost)
+    hostCtx.plugin(scheduleHost)
+    if (process.versions.electron !== undefined) {
+      hostCtx.plugin(ElectronDirectoryPicker)
+      // The auto row was disabled above; it normally mounts both faces of the
+      // interaction. Re-mount only the native client surface here so
+      // WorkspacePicker's picking affordance stays available while the
+      // ElectronDirectoryPicker serves the backend capability.
+      await hostCtx.loader.create({ name: '@deepseek-ai/dsh-client-ui-directory-picker-native' })
+    }
     provideCmdline(hostCtx, {
       // OS-assigned port; the SPA is loaded from the resulting loopback URL.
       args: ['--port', '0'],

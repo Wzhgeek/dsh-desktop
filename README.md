@@ -1,54 +1,95 @@
-# dsh-desktop
+# Dsh Desktop
 
-DeepSeek Harness 的桌面端应用：把现有的 Web GUI 装进一个 Electron 原生窗口。
+DeepSeek Harness 的桌面客户端。它在 Electron 主进程中启动完整的 `web` profile，并通过桌面 overlay 插件补齐原生窗口、Git、用量统计、搜索和会话效率功能。
 
-它不重写前端——`src/boot.ts` 在 Electron 主进程内 boot 一棵 `web` profile 插件树（与 `dsh web` 共享 Harness home，会话与设置互通），让操作系统分配空闲端口，Electron 窗口加载 `http://127.0.0.1:<port>`。页面来源与请求 Host 同源，现有浏览器信任围栏原样放行，前端一行未改。
+应用与 `dsh web` 共享 Harness home，因此工作区、会话、模型凭据和用户设置互通。内置服务只监听系统分配的 `127.0.0.1` 随机端口，Electron 窗口加载同源页面，继续使用 Harness 原有的浏览器信任边界。
 
 ## 运行
 
-前置：Node `^22.19 || >=24`、pnpm、以及 `DEEPSEEK_API_KEY`（写入根 `.env`）。
+前置：Node `^22.19 || >=24`、pnpm。
+
+API key 可以直接在应用内配置，无需 `.env`：启动后进入「设置 → 模型 → DeepSeek」，粘贴 API key 并应用。首次运行会自动打开模型配置引导；凭据由 Harness 的只写凭据存储管理。也可在根目录 `.env` 中设置 `DEEPSEEK_API_KEY`。
+
+首次安装（含 client 插件包的构建工具）：
 
 ```sh
 pnpm install
+pnpm --dir plugins/client install
 pnpm build
 pnpm start
 ```
+
+日常启动（构建产物已在时）：
+
+```sh
+pnpm start
+```
+
+开发或验证源码改动时使用 `pnpm dev`，它会先重建 host 和 client；`pnpm start` 只运行现有 `dist/` / `plugins/client/lib/` 产物。
 
 ## 脚本
 
 | 命令 | 作用 |
 |---|---|
-| `pnpm build` | 编译 `src/` 到 `dist/`（tsc） |
+| `pnpm build` | 构建 client overlay，并编译 `src/` 到 `dist/` |
 | `pnpm start` | 启动 Electron 窗口 |
 | `pnpm dev` | 编译后启动 |
-| `pnpm smoke` | 无 GUI 冒烟：boot 树、请求 SPA 首页、销毁 |
+| `pnpm test` | 运行桌面 host 与 client 单元测试 |
+| `pnpm smoke` | 无 GUI 集成冒烟：boot 插件树并验证主要 API 和页面入口 |
 | `pnpm render-smoke` | Electron 渲染冒烟：offscreen 加载 SPA 并校验 `window.__DSH_BOOT__` |
+| `pnpm runtime-smoke` | 校验 sandbox preload、桌面命令和主题 IPC |
+
+## 功能
+
+### 桌面集成
+
+- 系统托盘：关闭窗口时隐藏到托盘，托盘菜单可重新显示或彻底退出。
+- 原生通知：会话完成和预算达到阈值时发送系统通知；点击任务通知可恢复对应会话。
+- 应用快捷键：`Cmd/Ctrl+K` 打开命令面板，`Cmd/Ctrl+N` 新建会话，`Cmd/Ctrl+,` 打开设置。
+- 跟随系统深浅色、恢复上次活跃会话、原生目录选择器，以及 Dsh Desktop 应用名称和图标。
+
+### 会话与搜索
+
+- `Cmd/Ctrl+K` 统一搜索命令、会话标题、历史消息全文和当前工作区文件。
+- 在输入框键入 `@` 搜索并插入工作区文件引用。
+- 对话中的文件路径和文件搜索结果可以直接打开；默认使用系统文件管理器，也可在设置中选择 VS Code、Cursor 或终端。
+- 会话头提供任务概览，集中展示工作区、Git 变更/分支、子智能体、后台进程、浏览器和附件来源。
+- 对话左侧的轮次轨道支持快速定位，并在悬停时显示该轮摘要。
+- 会话可导出为 Markdown、纯文本或包含子会话与附件的 Session 日志 ZIP。
+- 定时任务面板支持延时、指定时间和周期运行，并可查看或删除已有计划。
+- 会话检查点可从任一已完成轮次创建新分支；原会话保持不变。
+
+### Git
+
+- 两栏布局固定展示版本历史和所选提交的文件/补丁详情。
+- 查看工作区状态、暂存区与工作树 diff，按文件或 hunk 暂存/取消暂存并提交。
+- 创建、切换本地分支，以及执行 fetch、pull 和 push。
+- 显示远端、上游及 ahead/behind 状态；可从历史提交恢复工作区并生成保留历史的新提交。
+
+### Usage 与外观
+
+- 按日、周和模型聚合 API 请求、输入/输出/缓存 Tokens 与估算成本。
+- 图表、汇总指标和明细表使用同一份跨会话持久化数据。
+- 支持每日或每月成本预算及通知阈值，达到阈值后发送一次系统通知。
+- 字体族、字号、强调色和代码高亮主题保存后即时生效，并在重启后保留。
 
 ## 结构
 
-- `src/boot.ts` — 进程内 boot `web` profile（复用 `@deepseek-ai/dsh-app-boot` 的 `boot`/`loadProfile`），返回 loopback URL；并挂载桌面 host 插件
-- `src/host/*` — 桌面 host 插件（cordis 函数插件，boot prepare 时挂载）：`desktop-host.ts`（ping + index tap）、`appearance-host.ts`、`usage-host.ts`、`git-host.ts`
-- `src/main.ts` — Electron 主进程：boot 树、创建窗口、关闭时 dispose 整棵树
-- `plugins/client` — 桌面 client 插件包 `@dsh-desktop/client`（browser bundle 由 client-modules 加载），注册设置页/会话头/Git 面板到 UI 插槽
-- `src/smoke.ts` / `src/render-smoke.ts` — 两层冒烟验证
-
-## 桌面扩展功能（overlay 插件，不动上游包）
-
-| 功能 | 落点 | 说明 |
-|---|---|---|
-| 外观个性化 | 设置页「Appearance」+ host CSS 注入 | 字体族/字号/accent 色/代码主题，偏好持久化到 `$DSH_HOME/dsh-desktop-appearance.json`，经 `tapIndex` 注入 CSS 变量，重启生效 |
-| 用量/成本 | 会话头显示 `X in · Y out · $估算` | 读 `tokenUsage` 投影 + host 定价表（DeepSeek 率卡），USD 估算 |
-| Git 面板 | `conversation.view` 的「Git」页签 | status/diff 展示 + 提交（`git add -A && git commit`），走 host `child_process`，参数化无注入 |
+- `src/boot.ts`：启动 `web` profile，挂载桌面 host 插件，并返回 loopback URL。
+- `src/main.ts`：Electron 生命周期、托盘、菜单、通知、主题和窗口恢复。
+- `src/preload.cts` / `src/desktop-ipc.ts`：context-isolated renderer bridge 与 IPC 数据校验。
+- `src/host/*`：外观、文件、Git、Usage、目录选择和定时任务的本地 API。
+- `plugins/client/src/client/*`：设置页、会话头、Git、Usage、命令面板和对话增强等 UI overlay。
+- `src/smoke.ts` / `src/render-smoke.ts` / `src/desktop-runtime-smoke.ts`：host、页面和 Electron runtime 三层验证。
 
 ## 已知限制与后续
 
-- Git 面板操作根目录按 `DSH_DESKTOP_GIT_ROOT` 环境变量 → 首个注册的 Harness workspace → `process.cwd()` 解析；尚未提供目录选择器，MVP 不跟踪当前会话所在 workspace
-- 外观偏好在设置页保存后**重启生效**（tapIndex 在 index 渲染时注入）；已加载页面不热更新
-- 用量定价为内置常量表（deepseek-chat / deepseek-reasoner），非实时抓取
-- 目录选择器暂用现有系统后端（macOS osascript），后续替换为 Electron `dialog.showOpenDialog`
-- 无 token 鉴权，风险模型与 `dsh web` 一致（绑定回环 + 同源检查）；后续可加本地 token 握手
-- 尚未配置 electron-builder 打包分发、应用图标与自动更新
-- 前端依赖 npm 包 `@deepseek-ai/dsh-web-frontend` 发布的 dist；桌面打包时需随应用携带
+- Git 面板默认跟随当前会话的工作区；`DSH_DESKTOP_GIT_ROOT` 可覆盖根目录。非 Git 目录会显示明确的空状态。
+- 用量成本基于内置 DeepSeek 率卡估算，不会实时抓取服务端价格。
+- 检查点恢复以“已完成轮次”为边界，通过创建子会话实现，不会截断或覆盖原会话。
+- 当前只提供源码运行方式，尚未配置 electron-builder 安装包、代码签名、自动更新和发布流水线。
+- 本地 Web 服务不使用额外 token 鉴权，安全模型与 `dsh web` 相同：仅绑定回环地址并执行同源校验。
+- 前端依赖 `@deepseek-ai/dsh-web-frontend` 发布包中的构建产物；后续制作安装包时需要一并打包。
 
 ## 协议
 

@@ -1,12 +1,13 @@
 /**
  * Usage feature — client registration. Registers the per-session usage readout
- * (tokens + estimated cost) into the conversation session header's action row.
+ * and the cross-session Usage settings page.
  * @module @dsh-desktop/client/usage
  */
 
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import { UsageReadout } from './UsageReadout.tsx'
+import { UsageDashboard } from './UsageDashboard.tsx'
 
 /**
  * Owner share of the conversation session header's action row: the render site
@@ -28,6 +29,12 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       scope: 'session'
       owner: ConversationHeaderActionOwnerProps
     }
+    /** One per-session utility aligned at the right edge of the session header. */
+    'conversation.session.header.utilities': {
+      kind: 'list'
+      scope: 'session'
+      owner: ConversationHeaderActionOwnerProps
+    }
   }
 }
 
@@ -42,4 +49,11 @@ export function register(ctx: ClientContext): void {
     // Negative order keeps the static readout ahead of interactive actions.
     order: -10,
   }, UsageReadout))
+
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
+    id: 'usage',
+    order: 15,
+    label: 'Usage',
+  }, UsageDashboard))
 }

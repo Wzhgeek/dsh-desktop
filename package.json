@@ -1,23 +1,28 @@
 {
   "name": "@deepseek-ai/dsh-desktop",
+  "productName": "Dsh Desktop",
   "description": "The DeepSeek Harness GUI as a native Electron desktop app",
   "version": "0.1.0-rc.5",
   "private": true,
   "type": "module",
   "main": "dist/main.js",
   "files": [
-    "dist"
+    "dist",
+    "resources"
   ],
   "scripts": {
     "build": "pnpm --dir plugins/client run build && tsc -p tsconfig.json",
     "start": "electron .",
     "dev": "pnpm build && electron .",
     "build:client": "pnpm --dir plugins/client run build",
+    "test": "node --import tsx --test \"src/*.test.ts\" \"src/host/*.test.ts\" \"tests/*.test.ts\"",
     "smoke": "tsx src/smoke.ts",
-    "render-smoke": "pnpm build && electron dist/render-smoke.js"
+    "render-smoke": "pnpm build && electron dist/render-smoke.js",
+    "runtime-smoke": "pnpm build && electron dist/desktop-runtime-smoke.js"
   },
   "license": "MIT",
   "dependencies": {
+    "@deepseek-ai/dsh": "^0.1.0-rc.6",
     "@dsh-desktop/client": "link:plugins/client",
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/cordis-plugin-group": "^1.0.1",
@@ -37,6 +42,7 @@
     "@deepseek-ai/dsh-compaction-basic": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-compaction-tool-result-pruner": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-cordis-client-runner": "^0.1.0-rc.5",
+    "@deepseek-ai/dsh-host-directory-picker": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-fs-local": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-goal": "^0.1.0-rc.5",
     "@deepseek-ai/dsh-goal-round-driver": "^0.1.0-rc.5",

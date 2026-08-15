@@ -29,7 +29,11 @@ export default defineConfig({
   dts: false,
   sourcemap: true,
   clean: false,
-  external: PLATFORM_MODULES,
+  deps: {
+    neverBundle: PLATFORM_MODULES,
+    alwaysBundle: [/^lucide-react(?:\/|$)/],
+    onlyBundle: false,
+  },
   define: {
     'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
   },
