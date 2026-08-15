@@ -71,12 +71,11 @@ jobs:
             arch: arm64
     runs-on: ${{ matrix.runner }}
     env:
-      CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-      CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.MAC_CSC_LINK == '' && 'false' || 'true' }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      DSH_MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+      DSH_MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+      DSH_APPLE_ID: ${{ secrets.APPLE_ID }}
+      DSH_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      DSH_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -91,7 +90,20 @@ jobs:
           corepack enable
           corepack prepare pnpm@${PNPM_VERSION} --activate
       - name: Install and build
+        shell: bash
         run: |
+          if [[ -n "${DSH_MAC_CSC_LINK}" ]]; then
+            export CSC_LINK="${DSH_MAC_CSC_LINK}"
+            export CSC_KEY_PASSWORD="${DSH_MAC_CSC_KEY_PASSWORD}"
+            export CSC_IDENTITY_AUTO_DISCOVERY=true
+          else
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          fi
+          if [[ -n "${DSH_APPLE_ID}" ]]; then
+            export APPLE_ID="${DSH_APPLE_ID}"
+            export APPLE_APP_SPECIFIC_PASSWORD="${DSH_APPLE_APP_SPECIFIC_PASSWORD}"
+            export APPLE_TEAM_ID="${DSH_APPLE_TEAM_ID}"
+          fi
           pnpm install --frozen-lockfile
           pnpm --dir plugins/client install --frozen-lockfile
           pnpm build
@@ -110,8 +122,8 @@ jobs:
     needs: validate
     runs-on: windows-latest
     env:
-      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      DSH_WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      DSH_WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -128,6 +140,10 @@ jobs:
       - name: Install and build
         shell: pwsh
         run: |
+          if ($env:DSH_WIN_CSC_LINK) {
+            $env:WIN_CSC_LINK = $env:DSH_WIN_CSC_LINK
+            $env:WIN_CSC_KEY_PASSWORD = $env:DSH_WIN_CSC_KEY_PASSWORD
+          }
           pnpm install --frozen-lockfile
           pnpm --dir plugins/client install --frozen-lockfile
           pnpm build

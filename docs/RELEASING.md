@@ -56,12 +56,12 @@ Electron 没有 Android target。当前应用还直接依赖 Electron main、Nod
 
 2. 提交版本变更并推送 `main`。
 
-3. 创建与 `package.json` 完全一致的 annotated tag。例如版本为 `0.1.0-rc.6`：
+3. 创建与 `package.json` 完全一致的 annotated tag。例如版本为 `0.1.0-rc.7`：
 
    ```sh
-   git tag -a v0.1.0-rc.6 -m "Dsh Desktop v0.1.0-rc.6"
+   git tag -a v0.1.0-rc.7 -m "Dsh Desktop v0.1.0-rc.7"
    git push origin main
-   git push origin v0.1.0-rc.6
+   git push origin v0.1.0-rc.7
    ```
 
 4. `.github/workflows/release.yml` 会分别在 macOS、Windows、Linux runner 构建，并在全部成功后创建 GitHub Release、上传安装包、更新元数据和 `SHA256SUMS.txt`。
