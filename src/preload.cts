@@ -8,6 +8,12 @@ const NOTIFICATION_CHANNEL = 'dsh-desktop:notification'
 const ACTIVE_SESSION_CHANNEL = 'dsh-desktop:active-session'
 const THEME_CHANNEL = 'dsh-desktop:theme'
 const OPEN_PATH_CHANNEL = 'dsh-desktop:open-path'
+const UPDATE_STATE_CHANNEL = 'dsh-desktop:update-state'
+const UPDATE_GET_STATE_CHANNEL = 'dsh-desktop:update-get-state'
+const UPDATE_CHECK_CHANNEL = 'dsh-desktop:update-check'
+const UPDATE_DOWNLOAD_CHANNEL = 'dsh-desktop:update-download'
+const UPDATE_INSTALL_CHANNEL = 'dsh-desktop:update-install'
+const UPDATE_OPEN_RELEASES_CHANNEL = 'dsh-desktop:update-open-releases'
 
 type CommandPayload =
   | { command: 'command-palette' | 'new-session' | 'settings' }
@@ -24,6 +30,16 @@ interface ThemePayload { dark: boolean }
 
 interface OpenPathRequest { path: string; cwd?: string; opener?: 'system' | 'vscode' | 'cursor' | 'finder' | 'terminal' }
 type OpenPathResult = { ok: true } | { ok: false; error: string }
+type UpdatePhase = 'unsupported' | 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+interface UpdateState {
+  phase: UpdatePhase
+  currentVersion: string
+  availableVersion?: string
+  progressPercent?: number
+  message?: string
+  checkedAt?: number
+}
+type UpdateActionResult = { ok: true } | { ok: false; error: string }
 
 function isBasicCommand(value: unknown): value is 'command-palette' | 'new-session' | 'settings' {
   return value === 'command-palette' || value === 'new-session' || value === 'settings'
@@ -43,6 +59,31 @@ function parseTheme(value: unknown): ThemePayload | undefined {
   if (typeof value !== 'object' || value === null) return undefined
   const dark = (value as Record<string, unknown>).dark
   return typeof dark === 'boolean' ? { dark } : undefined
+}
+
+function parseUpdateState(value: unknown): UpdateState | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const candidate = value as Record<string, unknown>
+  const phase = candidate.phase
+  if (!isUpdatePhase(phase) || typeof candidate.currentVersion !== 'string' || candidate.currentVersion.length === 0) return undefined
+  if (candidate.availableVersion !== undefined && typeof candidate.availableVersion !== 'string') return undefined
+  if (candidate.progressPercent !== undefined
+    && (typeof candidate.progressPercent !== 'number' || candidate.progressPercent < 0 || candidate.progressPercent > 100)) return undefined
+  if (candidate.message !== undefined && typeof candidate.message !== 'string') return undefined
+  if (candidate.checkedAt !== undefined && typeof candidate.checkedAt !== 'number') return undefined
+  return {
+    phase,
+    currentVersion: candidate.currentVersion,
+    ...(candidate.availableVersion === undefined ? {} : { availableVersion: candidate.availableVersion }),
+    ...(candidate.progressPercent === undefined ? {} : { progressPercent: candidate.progressPercent }),
+    ...(candidate.message === undefined ? {} : { message: candidate.message }),
+    ...(candidate.checkedAt === undefined ? {} : { checkedAt: candidate.checkedAt }),
+  }
+}
+
+function isUpdatePhase(value: unknown): value is UpdatePhase {
+  return value === 'unsupported' || value === 'idle' || value === 'checking' || value === 'available'
+    || value === 'not-available' || value === 'downloading' || value === 'downloaded' || value === 'error'
 }
 
 /** Compatibility path used only when the client plugin has not claimed the event. */
@@ -100,5 +141,28 @@ contextBridge.exposeInMainWorld('dshDesktop', {
   },
   openPath(request: OpenPathRequest): Promise<OpenPathResult> {
     return ipcRenderer.invoke(OPEN_PATH_CHANNEL, request) as Promise<OpenPathResult>
+  },
+  getUpdateState(): Promise<UpdateState> {
+    return ipcRenderer.invoke(UPDATE_GET_STATE_CHANNEL) as Promise<UpdateState>
+  },
+  checkForUpdates(): Promise<UpdateActionResult> {
+    return ipcRenderer.invoke(UPDATE_CHECK_CHANNEL) as Promise<UpdateActionResult>
+  },
+  downloadUpdate(): Promise<UpdateActionResult> {
+    return ipcRenderer.invoke(UPDATE_DOWNLOAD_CHANNEL) as Promise<UpdateActionResult>
+  },
+  installUpdate(): void {
+    ipcRenderer.send(UPDATE_INSTALL_CHANNEL)
+  },
+  openReleasePage(): Promise<UpdateActionResult> {
+    return ipcRenderer.invoke(UPDATE_OPEN_RELEASES_CHANNEL) as Promise<UpdateActionResult>
+  },
+  onUpdateState(listener: (state: UpdateState) => void): () => void {
+    const wrapped = (_event: Electron.IpcRendererEvent, value: unknown): void => {
+      const state = parseUpdateState(value)
+      if (state !== undefined) listener(state)
+    }
+    ipcRenderer.on(UPDATE_STATE_CHANNEL, wrapped)
+    return () => { ipcRenderer.removeListener(UPDATE_STATE_CHANNEL, wrapped) }
   },
 })

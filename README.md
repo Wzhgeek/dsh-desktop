@@ -38,6 +38,10 @@ pnpm start
 | `pnpm smoke` | 无 GUI 集成冒烟：boot 插件树并验证主要 API 和页面入口 |
 | `pnpm render-smoke` | Electron 渲染冒烟：offscreen 加载 SPA 并校验 `window.__DSH_BOOT__` |
 | `pnpm runtime-smoke` | 校验 sandbox preload、桌面命令和主题 IPC |
+| `pnpm pack:dir` | 构建当前平台的未安装目录，用于本机打包检查 |
+| `pnpm dist:mac` | 生成 macOS DMG/ZIP（Intel 与 Apple Silicon） |
+| `pnpm dist:win` | 生成 Windows x64 NSIS 安装程序 |
+| `pnpm dist:linux` | 生成 Linux x64 AppImage 与 DEB |
 
 ## 功能
 
@@ -47,6 +51,7 @@ pnpm start
 - 原生通知：会话完成和预算达到阈值时发送系统通知；点击任务通知可恢复对应会话。
 - 应用快捷键：`Cmd/Ctrl+K` 打开命令面板，`Cmd/Ctrl+N` 新建会话，`Cmd/Ctrl+,` 打开设置。
 - 跟随系统深浅色、恢复上次活跃会话、原生目录选择器，以及 Dsh Desktop 应用名称和图标。
+- 在「设置 → 通用设置」检查、下载并安装新版本；正式安装包从 GitHub Releases 获取更新元数据。
 
 ### 会话与搜索
 
@@ -87,9 +92,12 @@ pnpm start
 - Git 面板默认跟随当前会话的工作区；`DSH_DESKTOP_GIT_ROOT` 可覆盖根目录。非 Git 目录会显示明确的空状态。
 - 用量成本基于内置 DeepSeek 率卡估算，不会实时抓取服务端价格。
 - 检查点恢复以“已完成轮次”为边界，通过创建子会话实现，不会截断或覆盖原会话。
-- 当前只提供源码运行方式，尚未配置 electron-builder 安装包、代码签名、自动更新和发布流水线。
+- GitHub Actions 在推送 `v*` tag 后构建 macOS、Windows 和 Linux 安装包并创建 GitHub Release；版本与 tag 必须严格对应。
+- macOS 自动更新要求 Developer ID 签名及公证；Windows 建议配置代码签名以减少 SmartScreen 警告。Linux 的应用内替换仅适用于 AppImage，DEB 用户会被引导到发布页。
+- Electron 不支持 Android。Android 版需要单独的移动客户端与可远程访问、经过认证的 DSH 服务，不能直接复用当前仅绑定 `127.0.0.1` 的 Electron/Node 运行时。
 - 本地 Web 服务不使用额外 token 鉴权，安全模型与 `dsh web` 相同：仅绑定回环地址并执行同源校验。
-- 前端依赖 `@deepseek-ai/dsh-web-frontend` 发布包中的构建产物；后续制作安装包时需要一并打包。
+
+完整发布步骤、签名变量和更新行为见 [`docs/RELEASING.md`](docs/RELEASING.md)。
 
 ## 协议
 

@@ -1,0 +1,226 @@
+name: Build and publish release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '24'
+  PNPM_VERSION: '10.33.0'
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+
+jobs:
+  validate:
+    name: Validate source and tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@${PNPM_VERSION} --activate
+      - name: Verify tag matches package version
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          test "${RELEASE_TAG}" = "v${package_version}" || {
+            echo "Tag ${RELEASE_TAG} does not match package version v${package_version}." >&2
+            exit 1
+          }
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir plugins/client install --frozen-lockfile
+      - name: Test and build
+        run: |
+          pnpm test
+          pnpm build
+
+  macos:
+    name: macOS installers
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x64
+          - runner: macos-15
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+      CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.MAC_CSC_LINK == '' && 'false' || 'true' }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@${PNPM_VERSION} --activate
+      - name: Install and build
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir plugins/client install --frozen-lockfile
+          pnpm build
+          pnpm exec electron-builder --mac --${{ matrix.arch }} --publish never
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-macos-${{ matrix.arch }}
+          if-no-files-found: error
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+
+  windows:
+    name: Windows installer
+    needs: validate
+    runs-on: windows-latest
+    env:
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Enable pnpm
+        shell: pwsh
+        run: |
+          corepack enable
+          corepack prepare pnpm@${env:PNPM_VERSION} --activate
+      - name: Install and build
+        shell: pwsh
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir plugins/client install --frozen-lockfile
+          pnpm build
+          pnpm exec electron-builder --win --publish never
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-windows
+          if-no-files-found: error
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
+
+  linux:
+    name: Linux packages
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Enable pnpm
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@${PNPM_VERSION} --activate
+      - name: Install and build
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --dir plugins/client install --frozen-lockfile
+          pnpm build
+          pnpm exec electron-builder --linux --publish never
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-linux
+          if-no-files-found: error
+          path: |
+            release/*.AppImage
+            release/*.deb
+            release/*.blockmap
+            release/*-linux.yml
+
+  release:
+    name: Publish GitHub Release
+    needs: [macos, windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: desktop-*
+          path: release-artifacts
+          merge-multiple: true
+      - name: Create checksums and publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cd release-artifacts
+          version="${RELEASE_TAG#v}"
+          mapfile -t mac_zips < <(find . -maxdepth 1 -type f -name 'Dsh-Desktop-*-mac-*.zip' | sort)
+          test "${#mac_zips[@]}" -eq 2 || {
+            echo "Expected x64 and arm64 macOS ZIP files." >&2
+            exit 1
+          }
+          {
+            echo "version: ${version}"
+            echo "files:"
+            for file in "${mac_zips[@]}"; do
+              digest="$(openssl dgst -sha512 -binary "${file}" | openssl base64 -A)"
+              size="$(stat -c '%s' "${file}")"
+              echo "  - url: $(basename "${file}")"
+              echo "    sha512: ${digest}"
+              echo "    size: ${size}"
+            done
+            first_digest="$(openssl dgst -sha512 -binary "${mac_zips[0]}" | openssl base64 -A)"
+            echo "path: $(basename "${mac_zips[0]}")"
+            echo "sha512: ${first_digest}"
+            echo "releaseDate: '$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')'"
+          } > latest-mac.yml
+          find . -maxdepth 1 -type f ! -name SHA256SUMS.txt -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            | sed 's#  \./#  #' > SHA256SUMS.txt
+          mapfile -d '' files < <(find . -maxdepth 1 -type f -print0 | sort -z)
+          flags=(--verify-tag --generate-notes --title "Dsh Desktop ${RELEASE_TAG}")
+          [[ "${RELEASE_TAG}" == *-* ]] && flags+=(--prerelease)
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" "${files[@]}" --clobber
+          else
+            gh release create "${RELEASE_TAG}" "${files[@]}" "${flags[@]}"
+          fi

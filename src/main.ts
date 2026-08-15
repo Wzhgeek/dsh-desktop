@@ -24,6 +24,7 @@ import {
 } from 'electron'
 import type { NativeImage } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
+import electronUpdater from 'electron-updater'
 import type { Context } from '@deepseek-ai/cordis'
 import { bootDesktopTree } from './boot.ts'
 import {
@@ -32,11 +33,26 @@ import {
   DESKTOP_NOTIFICATION_CHANNEL,
   DESKTOP_OPEN_PATH_CHANNEL,
   DESKTOP_THEME_CHANNEL,
+  DESKTOP_UPDATE_CHECK_CHANNEL,
+  DESKTOP_UPDATE_DOWNLOAD_CHANNEL,
+  DESKTOP_UPDATE_GET_STATE_CHANNEL,
+  DESKTOP_UPDATE_INSTALL_CHANNEL,
+  DESKTOP_UPDATE_OPEN_RELEASES_CHANNEL,
+  DESKTOP_UPDATE_STATE_CHANNEL,
   isSessionId,
   parseNotification,
   parseOpenPathRequest,
 } from './desktop-ipc.ts'
-import type { DesktopCommandPayload, DesktopFileOpener, DesktopOpenPathResult, DesktopThemePayload } from './desktop-ipc.ts'
+import type {
+  DesktopCommandPayload,
+  DesktopFileOpener,
+  DesktopOpenPathResult,
+  DesktopThemePayload,
+  DesktopUpdateActionResult,
+  DesktopUpdateState,
+} from './desktop-ipc.ts'
+
+const { autoUpdater } = electronUpdater
 
 /** Booted tree plus the URL each created window loads. */
 const state: {
@@ -62,9 +78,12 @@ const APP_ICON_PATH = fileURLToPath(new URL('../resources/dsh-icon.png', import.
 const APP_NAME = 'Dsh Desktop'
 const LEGACY_USER_DATA_NAME = '@deepseek-ai/dsh-desktop'
 const STATE_FILE_NAME = 'dsh-desktop-state.json'
+const RELEASES_URL = 'https://github.com/Wzhgeek/dsh-desktop/releases'
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60_000
 let disposePromise: Promise<void> | undefined
 let stateWriteQueue: Promise<void> = Promise.resolve()
 let cachedAppIcon: NativeImage | undefined
+let updateState: DesktopUpdateState = initialUpdateState()
 
 // Renaming must not strand Chromium storage and desktop state in a new folder.
 const legacyUserDataPath = join(app.getPath('appData'), LEGACY_USER_DATA_NAME)
@@ -89,16 +108,20 @@ function getAppIcon(): NativeImage | undefined {
  * Dispose the plugin tree, then exit the application.
  * @param code - the process exit code.
  */
-async function disposeAndQuit(code: number): Promise<void> {
-  state.quitting = true
+async function disposeResources(): Promise<void> {
   disposePromise ??= (async () => {
     state.tray?.destroy()
     state.tray = undefined
     await stateWriteQueue
     await state.ctx?.fiber.dispose()
-    app.exit(code)
   })()
   await disposePromise
+}
+
+async function disposeAndQuit(code: number): Promise<void> {
+  state.quitting = true
+  await disposeResources()
+  app.exit(code)
 }
 
 /** Create the application window and load the embedded GUI. */
@@ -133,6 +156,7 @@ function createWindow(): BrowserWindow | undefined {
   })
   win.webContents.on('did-finish-load', () => {
     sendTheme(win)
+    sendUpdateState(win)
     if (state.activeSessionId !== undefined) {
       sendCommand({ command: 'restore-session', sessionId: state.activeSessionId }, win)
     }
@@ -168,6 +192,18 @@ function sendTheme(target = state.win): void {
   target.webContents.send(DESKTOP_THEME_CHANNEL, payload)
 }
 
+/** Publish the updater snapshot to the current renderer, if it is ready. */
+function sendUpdateState(target = state.win): void {
+  if (target === undefined || target.isDestroyed() || target.webContents.isLoadingMainFrame()) return
+  target.webContents.send(DESKTOP_UPDATE_STATE_CHANNEL, updateState)
+}
+
+/** Replace updater state while keeping the installed version authoritative. */
+function setUpdateState(next: Omit<DesktopUpdateState, 'currentVersion'>): void {
+  updateState = { currentVersion: app.getVersion(), ...next }
+  sendUpdateState()
+}
+
 /** Install native accelerators without claiming OS-global shortcuts. */
 function installApplicationMenu(): void {
   const send = (command: 'command-palette' | 'new-session' | 'settings') => (): void => {
@@ -177,6 +213,7 @@ function installApplicationMenu(): void {
     label: APP_NAME,
     submenu: [
       { role: 'about' },
+      { label: '检查更新…', click: () => { void checkForDesktopUpdates() } },
       { type: 'separator' },
       { label: '设置', accelerator: 'CmdOrCtrl+,', click: send('settings') },
       { type: 'separator' },
@@ -220,6 +257,13 @@ function installApplicationMenu(): void {
       ],
     },
     { label: '窗口', submenu: [{ role: 'minimize' }, { role: 'front' }] },
+    ...(process.platform === 'darwin' ? [] : [{
+      label: '帮助',
+      submenu: [
+        { label: '检查更新…', click: () => { void checkForDesktopUpdates() } },
+        { label: 'GitHub Releases', click: () => { void shell.openExternal(RELEASES_URL) } },
+      ],
+    }]),
   ]
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
@@ -310,6 +354,138 @@ function installIpc(): void {
     state.activeSessionId = value
     queueDesktopStateWrite()
   })
+  ipcMain.handle(DESKTOP_UPDATE_GET_STATE_CHANNEL, (event): DesktopUpdateState => {
+    return isTrustedRenderer(event.sender) ? updateState : unsupportedUpdateState('Untrusted renderer.')
+  })
+  ipcMain.handle(DESKTOP_UPDATE_CHECK_CHANNEL, async (event): Promise<DesktopUpdateActionResult> => {
+    if (!isTrustedRenderer(event.sender)) return { ok: false, error: 'Untrusted renderer.' }
+    return await checkForDesktopUpdates()
+  })
+  ipcMain.handle(DESKTOP_UPDATE_DOWNLOAD_CHANNEL, async (event): Promise<DesktopUpdateActionResult> => {
+    if (!isTrustedRenderer(event.sender)) return { ok: false, error: 'Untrusted renderer.' }
+    return await downloadDesktopUpdate()
+  })
+  ipcMain.on(DESKTOP_UPDATE_INSTALL_CHANNEL, (event) => {
+    if (!isTrustedRenderer(event.sender) || updateState.phase !== 'downloaded') return
+    void installDesktopUpdate()
+  })
+  ipcMain.handle(DESKTOP_UPDATE_OPEN_RELEASES_CHANNEL, async (event): Promise<DesktopUpdateActionResult> => {
+    if (!isTrustedRenderer(event.sender)) return { ok: false, error: 'Untrusted renderer.' }
+    try {
+      await shell.openExternal(RELEASES_URL)
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: errorText(error) }
+    }
+  })
+}
+
+/** Register updater events and schedule quiet periodic checks for packaged apps. */
+function installDesktopUpdater(): void {
+  if (!desktopUpdatesSupported()) {
+    updateState = initialUpdateState()
+    return
+  }
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.allowPrerelease = app.getVersion().includes('-')
+  autoUpdater.on('checking-for-update', () => {
+    setUpdateState({ phase: 'checking', message: '正在检查 GitHub Releases…' })
+  })
+  autoUpdater.on('update-available', (info) => {
+    setUpdateState({ phase: 'available', availableVersion: info.version, checkedAt: Date.now() })
+  })
+  autoUpdater.on('update-not-available', () => {
+    setUpdateState({ phase: 'not-available', checkedAt: Date.now() })
+  })
+  autoUpdater.on('download-progress', (progress) => {
+    setUpdateState({
+      phase: 'downloading',
+      ...optionalAvailableVersion(updateState.availableVersion),
+      progressPercent: Math.max(0, Math.min(100, progress.percent)),
+    })
+  })
+  autoUpdater.on('update-downloaded', (info) => {
+    setUpdateState({ phase: 'downloaded', availableVersion: info.version, progressPercent: 100 })
+  })
+  autoUpdater.on('error', (error) => {
+    setUpdateState({
+      phase: 'error',
+      ...optionalAvailableVersion(updateState.availableVersion),
+      message: errorText(error),
+      checkedAt: Date.now(),
+    })
+  })
+
+  const firstCheck = setTimeout(() => { void checkForDesktopUpdates() }, 15_000)
+  firstCheck.unref()
+  const repeatedChecks = setInterval(() => { void checkForDesktopUpdates() }, UPDATE_CHECK_INTERVAL_MS)
+  repeatedChecks.unref()
+}
+
+async function checkForDesktopUpdates(): Promise<DesktopUpdateActionResult> {
+  if (!desktopUpdatesSupported()) return { ok: false, error: updateState.message ?? 'Updates are unavailable.' }
+  if (updateState.phase === 'checking' || updateState.phase === 'downloading' || updateState.phase === 'downloaded') {
+    return { ok: false, error: 'An update operation is already running.' }
+  }
+  try {
+    setUpdateState({ phase: 'checking', message: '正在检查 GitHub Releases…' })
+    await autoUpdater.checkForUpdates()
+    return { ok: true }
+  } catch (error) {
+    const message = errorText(error)
+    setUpdateState({ phase: 'error', message, checkedAt: Date.now() })
+    return { ok: false, error: message }
+  }
+}
+
+async function downloadDesktopUpdate(): Promise<DesktopUpdateActionResult> {
+  if (updateState.phase !== 'available') return { ok: false, error: 'No downloadable update is available.' }
+  const availableVersion = updateState.availableVersion
+  try {
+    setUpdateState({ phase: 'downloading', ...optionalAvailableVersion(availableVersion), progressPercent: 0 })
+    await autoUpdater.downloadUpdate()
+    return { ok: true }
+  } catch (error) {
+    const message = errorText(error)
+    setUpdateState({ phase: 'error', ...optionalAvailableVersion(availableVersion), message })
+    return { ok: false, error: message }
+  }
+}
+
+async function installDesktopUpdate(): Promise<void> {
+  state.quitting = true
+  try {
+    await disposeResources()
+    autoUpdater.quitAndInstall(false, true)
+  } catch (error) {
+    state.quitting = false
+    setUpdateState({ phase: 'error', ...optionalAvailableVersion(updateState.availableVersion), message: errorText(error) })
+  }
+}
+
+function desktopUpdatesSupported(): boolean {
+  return app.isPackaged && (process.platform !== 'linux' || Boolean(process.env.APPIMAGE))
+}
+
+function initialUpdateState(): DesktopUpdateState {
+  if (!app.isPackaged) return unsupportedUpdateState('开发版本不连接发布更新源。')
+  if (process.platform === 'linux' && !process.env.APPIMAGE) {
+    return unsupportedUpdateState('Linux 自动安装仅支持 AppImage；请从 Releases 更新当前安装包。')
+  }
+  return { phase: 'idle', currentVersion: app.getVersion() }
+}
+
+function unsupportedUpdateState(message: string): DesktopUpdateState {
+  return { phase: 'unsupported', currentVersion: app.getVersion(), message }
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function optionalAvailableVersion(version: string | undefined): Pick<DesktopUpdateState, 'availableVersion'> | Record<never, never> {
+  return version === undefined ? {} : { availableVersion: version }
 }
 
 interface SourceLocation { path: string; line?: number; column?: number }
@@ -423,6 +599,7 @@ void app.whenReady().then(async () => {
   const icon = getAppIcon()
   if (process.platform === 'darwin' && icon !== undefined) app.dock?.setIcon(icon)
   installIpc()
+  installDesktopUpdater()
   installApplicationMenu()
   await readDesktopState()
   try {

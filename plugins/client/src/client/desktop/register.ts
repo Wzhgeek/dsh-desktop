@@ -7,7 +7,9 @@
 import type { ClientContext, SessionId, SessionListState } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { FileOpenerSetting } from './FileOpenerSetting.tsx'
+import { UpdateSetting } from './UpdateSetting.tsx'
 import type { DesktopFileOpener } from './file-openers.ts'
+import type { DesktopUpdateApi } from './update-api.ts'
 import { installFilePathLinks } from './file-paths.ts'
 import { PALETTE_OPEN_EVENT } from '../palette/CommandPalette.tsx'
 
@@ -25,7 +27,7 @@ export interface DesktopNotification {
 }
 
 /** Minimal API exposed by the context-isolated preload script. */
-export interface DesktopApi {
+export interface DesktopApi extends DesktopUpdateApi {
   notify(payload: DesktopNotification): void
   setActiveSession(sessionId: string | undefined): void
   openPath(request: { path: string; cwd?: string; opener?: DesktopFileOpener }): Promise<{ ok: true } | { ok: false; error: string }>
@@ -122,6 +124,11 @@ export function register(ctx: ClientContext): void {
     id: 'desktop-file-opener',
     order: 40,
   }, FileOpenerSetting))
+  ctx.slots.inject('settings.general.item', () => ctx.slots.register({
+    name: 'settings.general.item',
+    id: 'desktop-updates',
+    order: 50,
+  }, UpdateSetting))
 
   const disposeFilePathLinks = installFilePathLinks(ctx)
   let pendingRestore: SessionId | undefined

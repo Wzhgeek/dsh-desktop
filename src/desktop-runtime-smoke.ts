@@ -2,7 +2,7 @@
 
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow } from 'electron'
-import { DESKTOP_COMMAND_CHANNEL, DESKTOP_THEME_CHANNEL } from './desktop-ipc.ts'
+import { DESKTOP_COMMAND_CHANNEL, DESKTOP_THEME_CHANNEL, DESKTOP_UPDATE_STATE_CHANNEL } from './desktop-ipc.ts'
 
 const PRELOAD_PATH = fileURLToPath(new URL('./preload.cjs', import.meta.url))
 
@@ -31,29 +31,46 @@ void app.whenReady().then(async () => {
     if (bridgeType !== 'function') throw new Error('notification bridge was not exposed')
     const openPathBridgeType = await win.webContents.executeJavaScript('typeof window.dshDesktop?.openPath') as unknown
     if (openPathBridgeType !== 'function') throw new Error('open-path bridge was not exposed')
+    const updaterBridgeTypes = await win.webContents.executeJavaScript(`[
+      typeof window.dshDesktop?.getUpdateState,
+      typeof window.dshDesktop?.checkForUpdates,
+      typeof window.dshDesktop?.downloadUpdate,
+      typeof window.dshDesktop?.installUpdate,
+      typeof window.dshDesktop?.openReleasePage,
+      typeof window.dshDesktop?.onUpdateState,
+    ].join(',')`) as unknown
+    if (updaterBridgeTypes !== 'function,function,function,function,function,function') {
+      throw new Error('updater bridge was not exposed')
+    }
 
     await win.webContents.executeJavaScript(`
-      window.__desktopSmoke = { commands: 0, themes: 0, fallbackClicks: 0 };
+      window.__desktopSmoke = { commands: 0, themes: 0, updateStates: 0, fallbackClicks: 0 };
       window.__desktopCommandListener = (event) => {
         window.__desktopSmoke.commands += 1;
         event.preventDefault();
       };
       window.addEventListener(${JSON.stringify(DESKTOP_COMMAND_CHANNEL)}, window.__desktopCommandListener);
       window.addEventListener(${JSON.stringify(DESKTOP_THEME_CHANNEL)}, () => { window.__desktopSmoke.themes += 1; });
+      window.__disposeUpdateSmoke = window.dshDesktop.onUpdateState((state) => {
+        if (state.phase === 'available' && state.availableVersion === '9.9.9') window.__desktopSmoke.updateStates += 1;
+      });
       document.querySelector('button').addEventListener('click', () => { window.__desktopSmoke.fallbackClicks += 1; });
     `)
     win.webContents.send(DESKTOP_COMMAND_CHANNEL, { command: 'settings' })
     win.webContents.send(DESKTOP_THEME_CHANNEL, { dark: true })
+    win.webContents.send(DESKTOP_UPDATE_STATE_CHANNEL, { phase: 'available', currentVersion: '1.0.0', availableVersion: '9.9.9' })
     await waitFor(win, 'window.__desktopSmoke.commands', 1)
     await waitFor(win, 'window.__desktopSmoke.themes', 1)
+    await waitFor(win, 'window.__desktopSmoke.updateStates', 1)
     await waitFor(win, 'window.__desktopSmoke.fallbackClicks', 0)
 
     await win.webContents.executeJavaScript(`
       window.removeEventListener(${JSON.stringify(DESKTOP_COMMAND_CHANNEL)}, window.__desktopCommandListener);
+      window.__disposeUpdateSmoke();
     `)
     win.webContents.send(DESKTOP_COMMAND_CHANNEL, { command: 'settings' })
     await waitFor(win, 'window.__desktopSmoke.fallbackClicks', 1)
-    console.log('OK: sandbox preload, desktop command cancellation/fallback, and theme bridge')
+    console.log('OK: sandbox preload, desktop commands, theme bridge, and updater bridge')
     app.exit(0)
   } catch (error) {
     console.error(error)
