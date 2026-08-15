@@ -22,6 +22,16 @@ interface MutableTurn {
   contentLength: number
 }
 
+/** Width ladder centered on the selected or temporarily hovered turn. */
+export function turnRailMarkWidth(index: number, centerIndex: number): number {
+  if (centerIndex < 0) return 10
+  const distance = Math.abs(index - centerIndex)
+  if (distance === 0) return 24
+  if (distance === 1) return 18
+  if (distance === 2) return 14
+  return 10
+}
+
 /** Build loaded turn stops without duplicating the conversation's grouping logic. */
 export function deriveTurnRailItems(
   nodes: readonly ConversationNode[],

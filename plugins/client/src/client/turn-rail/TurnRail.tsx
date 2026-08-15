@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { deriveTurnRailItems } from './turns.ts'
+import { deriveTurnRailItems, turnRailMarkWidth } from './turns.ts'
 import type { TurnRailItem } from './turns.ts'
 
 export type TurnRailProps = PropsRuntime<'conversation.session.header.utilities'>
@@ -177,6 +177,8 @@ export function TurnRail({ useSession }: TurnRailProps): JSX.Element | null {
   )
 
   const activeTooltip = tooltip === null ? undefined : turns.find(item => item.key === tooltip.key)
+  const emphasisKey = tooltip?.key ?? activeKey
+  const emphasisIndex = turns.findIndex(item => item.key === emphasisKey)
   return (
     <nav
       className="dsh-turn-rail"
@@ -201,7 +203,7 @@ export function TurnRail({ useSession }: TurnRailProps): JSX.Element | null {
               aria-label={`跳转到第 ${item.number} 轮：${item.summary}`}
               aria-current={active ? 'step' : undefined}
               aria-describedby={described ? tooltipId : undefined}
-              style={{ '--dsh-turn-rail-hover-width': `${String(item.expandedWidth)}px` } as CSSProperties}
+              style={{ '--dsh-turn-rail-mark-width': `${String(turnRailMarkWidth(index, emphasisIndex))}px` } as CSSProperties}
               onClick={() => jumpTo(item)}
               onKeyDown={(event) => moveFocus(event, index)}
               onMouseEnter={(event: MouseEvent<HTMLButtonElement>) => revealTooltip(item, event.currentTarget)}
@@ -355,19 +357,15 @@ const TURN_RAIL_CSS = `
   cursor: pointer;
 }
 .dsh-turn-rail-mark {
-  width: 10px;
+  width: var(--dsh-turn-rail-mark-width, 10px);
   height: 2px;
   border-radius: 1px;
   background: currentColor;
   opacity: .52;
-  transition: width 110ms ease, height 110ms ease, opacity 110ms ease, color 110ms ease;
-}
-.dsh-turn-rail:hover .dsh-turn-rail-mark {
-  width: var(--dsh-turn-rail-hover-width, 22px);
+  transition: width 130ms ease, height 110ms ease, opacity 110ms ease, color 110ms ease;
 }
 .dsh-turn-rail-button:hover .dsh-turn-rail-mark,
 .dsh-turn-rail-button:focus-visible .dsh-turn-rail-mark {
-  width: var(--dsh-turn-rail-hover-width, 22px);
   height: 3px;
   opacity: .92;
   color: var(--dsh-desktop-accent, var(--dsw-alias-state-business-primary, #6d5ce7));
