@@ -1,3 +1,5 @@
+// Author: Zihan Wang
+// <wangzh011031@163.com>
 /**
  * dsh-desktop main process — present the embedded dsh `web` tree in a native
  * window. Boots the tree through {@link bootDesktopTree}, then loads the SPA
@@ -7,6 +9,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
@@ -14,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   Menu,
   nativeImage,
@@ -27,6 +31,7 @@ import type { MenuItemConstructorOptions } from 'electron'
 import electronUpdater from 'electron-updater'
 import type { Context } from '@deepseek-ai/cordis'
 import { bootDesktopTree } from './boot.ts'
+import { packagedUpdateUnavailableReason } from './desktop-update.ts'
 import {
   DESKTOP_ACTIVE_SESSION_CHANNEL,
   DESKTOP_COMMAND_CHANNEL,
@@ -469,15 +474,27 @@ async function installDesktopUpdate(): Promise<void> {
 }
 
 function desktopUpdatesSupported(): boolean {
-  return app.isPackaged && (process.platform !== 'linux' || Boolean(process.env.APPIMAGE))
+  return packagedUpdateUnavailableReason(updateInstallSnapshot()) === undefined
 }
 
 function initialUpdateState(): DesktopUpdateState {
-  if (!app.isPackaged) return unsupportedUpdateState('开发版本不连接发布更新源。')
-  if (process.platform === 'linux' && !process.env.APPIMAGE) {
-    return unsupportedUpdateState('Linux 自动安装仅支持 AppImage；请从 Releases 更新当前安装包。')
-  }
+  const unavailable = packagedUpdateUnavailableReason(updateInstallSnapshot())
+  if (unavailable !== undefined) return unsupportedUpdateState(unavailable)
   return { phase: 'idle', currentVersion: app.getVersion() }
+}
+
+function updateInstallSnapshot(): {
+  packaged: boolean
+  platform: NodeJS.Platform
+  appImage: boolean
+  hasUpdateConfig: boolean
+} {
+  return {
+    packaged: app.isPackaged,
+    platform: process.platform,
+    appImage: Boolean(process.env.APPIMAGE),
+    hasUpdateConfig: existsSync(join(process.resourcesPath, 'app-update.yml')),
+  }
 }
 
 function unsupportedUpdateState(message: string): DesktopUpdateState {
@@ -612,10 +629,12 @@ void app.whenReady().then(async () => {
     state.url = url
   } catch (error) {
     console.error(error)
+    const message = error instanceof Error ? error.message : String(error)
+    dialog.showErrorBox('Dsh Desktop 无法启动', message)
     app.exit(1)
     return
   }
-  createWindow()
+  showWindow()
   await createTray()
   nativeTheme.on('updated', () => { sendTheme() })
 })
