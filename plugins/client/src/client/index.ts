@@ -20,7 +20,6 @@ import { register as registerSummary } from './summary/register.ts'
 import { register as registerTurnRail } from './turn-rail/register.ts'
 import { register as registerMentions } from './mentions/register.ts'
 import { register as registerSchedule } from './schedule/register.ts'
-import { register as registerCheckpoint } from './checkpoint/register.ts'
 
 /** Required client services: the slot registry and locale copy. */
 export const inject = ['slots', 'locale', 'sessions', 'workspaces']
@@ -42,7 +41,6 @@ export function apply(ctx: ClientContext): void {
   registerPalette(ctx)
   registerMentions(ctx)
   registerSchedule(ctx)
-  registerCheckpoint(ctx)
   registerTurnRail(ctx)
   registerSummary(ctx)
   registerUsage(ctx)

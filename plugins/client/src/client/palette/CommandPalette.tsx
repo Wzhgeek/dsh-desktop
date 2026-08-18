@@ -14,14 +14,12 @@ import WalletCards from 'lucide-react/dist/esm/icons/wallet-cards.mjs'
 import CalendarClock from 'lucide-react/dist/esm/icons/calendar-clock.mjs'
 import Code2 from 'lucide-react/dist/esm/icons/code-2.mjs'
 import Hammer from 'lucide-react/dist/esm/icons/hammer.mjs'
-import History from 'lucide-react/dist/esm/icons/history.mjs'
 import type { ClientContext, SessionId, SessionListState } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { exportCurrentSession } from '../export/session-export.ts'
 import { openDesktopPath } from '../desktop/file-openers.ts'
 import { SCHEDULE_OPEN_EVENT } from '../schedule/events.ts'
-import { CHECKPOINT_OPEN_EVENT } from '../checkpoint/events.ts'
 
 export const PALETTE_OPEN_EVENT = 'dsh-desktop:palette-open'
 
@@ -178,10 +176,6 @@ export function CommandPalette({ ctx, useSessions }: CommandPaletteProps): JSX.E
     {
       id: 'schedules', label: '打开定时任务', detail: '查看、创建或删除当前会话计划', keywords: 'schedule reminder timer 定时 任务 提醒',
       action: () => { window.dispatchEvent(new Event(SCHEDULE_OPEN_EVENT)) },
-    },
-    {
-      id: 'checkpoints', label: '恢复会话检查点', detail: '从已完成轮次创建可逆分支', keywords: 'checkpoint restore fork 回退 恢复 检查点',
-      action: () => { window.dispatchEvent(new Event(CHECKPOINT_OPEN_EVENT)) },
     },
     {
       id: 'export-markdown', label: '导出为 Markdown', detail: '完整当前会话', keywords: 'export download markdown 导出',
@@ -343,7 +337,6 @@ function iconFor(item: PaletteItem): JSX.Element {
   if (item.id === 'git') return <GitBranch size={16} />
   if (item.id === 'project') return <Hammer size={16} />
   if (item.id === 'schedules') return <CalendarClock size={16} />
-  if (item.id === 'checkpoints') return <History size={16} />
   if (item.id.startsWith('export')) return <Download size={16} />
   return <Terminal size={16} />
 }
