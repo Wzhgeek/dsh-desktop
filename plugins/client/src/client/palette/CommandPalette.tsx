@@ -12,6 +12,8 @@ import Settings from 'lucide-react/dist/esm/icons/settings.mjs'
 import Terminal from 'lucide-react/dist/esm/icons/terminal.mjs'
 import WalletCards from 'lucide-react/dist/esm/icons/wallet-cards.mjs'
 import CalendarClock from 'lucide-react/dist/esm/icons/calendar-clock.mjs'
+import Code2 from 'lucide-react/dist/esm/icons/code-2.mjs'
+import Hammer from 'lucide-react/dist/esm/icons/hammer.mjs'
 import History from 'lucide-react/dist/esm/icons/history.mjs'
 import type { ClientContext, SessionId, SessionListState } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
@@ -29,10 +31,18 @@ interface DesktopFileSearchResult {
   name: string
 }
 
+interface DesktopContentSearchResult {
+  path: string
+  relativePath: string
+  line: number
+  column: number
+  preview: string
+}
+
 type PaletteItem = {
   id: string
-  group: '命令' | '会话' | '内容' | '文件'
-  kind: 'command' | 'session' | 'content' | 'file'
+  group: '命令' | '会话' | '内容' | '代码' | '文件'
+  kind: 'command' | 'session' | 'content' | 'code' | 'file'
   label: string
   detail?: string
   keywords?: string
@@ -58,6 +68,7 @@ export function CommandPalette({ ctx, useSessions }: CommandPaletteProps): JSX.E
   const [query, setQuery] = useState('')
   const deferredQuery = useDeferredValue(query.trim())
   const [contentHits, setContentHits] = useState<Array<{ sessionId: SessionId; snippet: string }>>([])
+  const [codeHits, setCodeHits] = useState<DesktopContentSearchResult[]>([])
   const [fileHits, setFileHits] = useState<DesktopFileSearchResult[]>([])
   const [searching, setSearching] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
@@ -67,6 +78,7 @@ export function CommandPalette({ ctx, useSessions }: CommandPaletteProps): JSX.E
     setOpen(false)
     setQuery('')
     setContentHits([])
+    setCodeHits([])
     setFileHits([])
   }, [])
 
@@ -95,6 +107,7 @@ export function CommandPalette({ ctx, useSessions }: CommandPaletteProps): JSX.E
   useEffect(() => {
     if (!open || deferredQuery.length < 2) {
       setContentHits([])
+      setCodeHits([])
       setFileHits([])
       setSearching(false)
       return
@@ -113,11 +126,20 @@ export function CommandPalette({ ctx, useSessions }: CommandPaletteProps): JSX.E
               const value = await response.json() as { items?: DesktopFileSearchResult[] }
               return response.ok ? value.items ?? [] : []
             })
-      void Promise.allSettled([sessionSearch, fileSearch]).then(([contentResult, filesResult]) => {
+      const codeSearch = current?.cwd === undefined
+        ? Promise.resolve([])
+        : fetch(`/api/desktop/workspace/search-content?${new URLSearchParams({ cwd: current.cwd, q: deferredQuery }).toString()}`, { signal: controller.signal })
+            .then(async response => {
+              const value = await response.json() as { items?: DesktopContentSearchResult[] }
+              return response.ok ? value.items ?? [] : []
+            })
+      void Promise.allSettled([sessionSearch, fileSearch, codeSearch]).then(([contentResult, filesResult, codeResult]) => {
         if (controller.signal.aborted) return
         setContentHits(contentResult.status === 'fulfilled' ? contentResult.value : [])
         setFileHits(filesResult.status === 'fulfilled' ? filesResult.value : [])
+        setCodeHits(codeResult.status === 'fulfilled' ? codeResult.value : [])
         if (filesResult.status === 'rejected') console.warn('command palette file search failed', filesResult.reason)
+        if (codeResult.status === 'rejected') console.warn('command palette content search failed', codeResult.reason)
       }).finally(() => {
         if (!controller.signal.aborted) setSearching(false)
       })
@@ -148,6 +170,10 @@ export function CommandPalette({ ctx, useSessions }: CommandPaletteProps): JSX.E
     {
       id: 'git', label: '打开 Git', detail: '版本历史与具体变更', keywords: 'git history changes 版本 历史',
       action: openGit,
+    },
+    {
+      id: 'project', label: '打开项目工作台', detail: '项目记忆、测试与构建', keywords: 'project memory test build 项目 记忆 测试 构建',
+      action: openProject,
     },
     {
       id: 'schedules', label: '打开定时任务', detail: '查看、创建或删除当前会话计划', keywords: 'schedule reminder timer 定时 任务 提醒',
@@ -208,8 +234,19 @@ export function CommandPalette({ ctx, useSessions }: CommandPaletteProps): JSX.E
         if (result.ok === false) throw new Error(result.error)
       },
     }))
-    return [...commands, ...titleMatches, ...content, ...files]
-  }, [contentHits, ctx.sessions, deferredQuery, fileHits, sessions.byId, sessions.ids, staticCommands])
+    const code = codeHits.slice(0, 14).map(hit => ({
+      id: `code:${hit.path}:${String(hit.line)}:${String(hit.column)}`,
+      group: '代码' as const,
+      kind: 'code' as const,
+      label: `${hit.relativePath}:${String(hit.line)}`,
+      detail: hit.preview.trim(),
+      action: async () => {
+        const result = await openDesktopPath({ path: `${hit.path}:${String(hit.line)}:${String(hit.column)}` })
+        if (result.ok === false) throw new Error(result.error)
+      },
+    }))
+    return [...commands, ...titleMatches, ...content, ...code, ...files]
+  }, [codeHits, contentHits, ctx.sessions, deferredQuery, fileHits, sessions.byId, sessions.ids, staticCommands])
 
   useEffect(() => { setActiveIndex(0) }, [deferredQuery])
   useEffect(() => { setActiveIndex(index => Math.min(index, Math.max(0, items.length - 1))) }, [items.length])
@@ -235,13 +272,14 @@ export function CommandPalette({ ctx, useSessions }: CommandPaletteProps): JSX.E
           <input
             ref={input}
             value={query}
-            placeholder="搜索命令、会话、内容或文件"
-            aria-label="搜索命令、会话、内容或文件"
+            placeholder="搜索命令、会话、代码或文件"
+            aria-label="搜索命令、会话、代码或文件"
             aria-controls="dsh-command-palette-results"
             aria-activedescendant={items[activeIndex]?.id}
             onChange={event => {
               setQuery(event.currentTarget.value)
               setContentHits([])
+              setCodeHits([])
               setFileHits([])
             }}
             onKeyDown={event => {
@@ -287,7 +325,7 @@ export function CommandPalette({ ctx, useSessions }: CommandPaletteProps): JSX.E
 }
 
 function groupItems(items: PaletteItem[]): Array<{ name: PaletteItem['group']; items: PaletteItem[] }> {
-  const order: PaletteItem['group'][] = ['命令', '会话', '内容', '文件']
+  const order: PaletteItem['group'][] = ['命令', '会话', '内容', '代码', '文件']
   return order.flatMap(name => {
     const grouped = items.filter(item => item.group === name)
     return grouped.length === 0 ? [] : [{ name, items: grouped }]
@@ -297,11 +335,13 @@ function groupItems(items: PaletteItem[]): Array<{ name: PaletteItem['group']; i
 function iconFor(item: PaletteItem): JSX.Element {
   if (item.kind === 'session') return <MessageSquare size={16} />
   if (item.kind === 'content') return <FileText size={16} />
+  if (item.kind === 'code') return <Code2 size={16} />
   if (item.kind === 'file') return <File size={16} />
   if (item.id === 'new-session') return <Plus size={16} />
   if (item.id === 'settings') return <Settings size={16} />
   if (item.id === 'usage') return <WalletCards size={16} />
   if (item.id === 'git') return <GitBranch size={16} />
+  if (item.id === 'project') return <Hammer size={16} />
   if (item.id === 'schedules') return <CalendarClock size={16} />
   if (item.id === 'checkpoints') return <History size={16} />
   if (item.id.startsWith('export')) return <Download size={16} />
@@ -322,6 +362,11 @@ function openUsage(): void {
 
 function openGit(): void {
   const tab = [...document.querySelectorAll<HTMLElement>('[role="tab"],button')].find(entry => entry.textContent?.trim() === 'Git')
+  tab?.click()
+}
+
+function openProject(): void {
+  const tab = [...document.querySelectorAll<HTMLElement>('[role="tab"],button')].find(entry => entry.textContent?.trim() === '项目')
   tab?.click()
 }
 

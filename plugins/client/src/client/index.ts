@@ -13,6 +13,7 @@ import { register as registerAppearance } from './appearance/register.ts'
 import { register as registerDesktop } from './desktop/register.ts'
 import { register as registerUsage } from './usage/register.ts'
 import { register as registerGit } from './git/register.ts'
+import { register as registerProject } from './project/register.ts'
 import { register as registerExport } from './export/register.ts'
 import { register as registerPalette } from './palette/register.ts'
 import { register as registerSummary } from './summary/register.ts'
@@ -45,5 +46,6 @@ export function apply(ctx: ClientContext): void {
   registerTurnRail(ctx)
   registerSummary(ctx)
   registerUsage(ctx)
+  registerProject(ctx)
   registerGit(ctx)
 }

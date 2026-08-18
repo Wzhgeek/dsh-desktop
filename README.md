@@ -55,7 +55,7 @@ pnpm start
 
 ### 会话与搜索
 
-- `Cmd/Ctrl+K` 统一搜索命令、会话标题、历史消息全文和当前工作区文件。
+- `Cmd/Ctrl+K` 统一搜索命令、会话标题、历史消息全文、当前工作区文件名和代码内容；代码结果显示文件与行号，点击后按首选应用打开。
 - 在输入框键入 `@` 搜索并插入工作区文件引用。
 - 对话中的文件路径和文件搜索结果可以直接打开；默认使用系统文件管理器，也可在设置中选择 VS Code、Cursor 或终端。
 - 会话头提供任务概览，集中展示工作区、Git 变更/分支、子智能体、后台进程、浏览器和附件来源。
@@ -70,6 +70,13 @@ pnpm start
 - 查看工作区状态、暂存区与工作树 diff，按文件或 hunk 暂存/取消暂存并提交。
 - 创建、切换本地分支，以及执行 fetch、pull 和 push。
 - 显示远端、上游及 ahead/behind 状态；可从历史提交恢复工作区并生成保留历史的新提交。
+- 通过 GitHub CLI 连接远端平台：查看当前分支的 PR 与 CI 状态、按仓库模板创建 PR、用 `Fixes #123` 关联 issue，并在系统浏览器打开仓库或 PR。
+
+### 项目工作台
+
+- 「项目」页自动检测 package scripts、Make、Cargo、Go 和 pytest 的测试/构建入口，一键运行、停止并查看退出状态、耗时与完整输出。
+- 项目记忆保存在工作区根目录的 `AGENTS.local.md`，由 Harness 的 workspace instructions 在会话中自动加载。
+- 可从 lockfile、脚本和 TypeScript 配置检测初始项目约定，再继续编辑、沉淀团队偏好。
 
 ### Usage 与外观
 
@@ -83,13 +90,15 @@ pnpm start
 - `src/boot.ts`：启动 `web` profile，挂载桌面 host 插件，并返回 loopback URL。
 - `src/main.ts`：Electron 生命周期、托盘、菜单、通知、主题和窗口恢复。
 - `src/preload.cts` / `src/desktop-ipc.ts`：context-isolated renderer bridge 与 IPC 数据校验。
-- `src/host/*`：外观、文件、Git、Usage、目录选择和定时任务的本地 API。
+- `src/host/*`：外观、文件/代码搜索、Git/GitHub、项目记忆与运行、Usage、目录选择和定时任务的本地 API。
 - `plugins/client/src/client/*`：设置页、会话头、Git、Usage、命令面板和对话增强等 UI overlay。
 - `src/smoke.ts` / `src/render-smoke.ts` / `src/desktop-runtime-smoke.ts`：host、页面和 Electron runtime 三层验证。
 
 ## 已知限制与后续
 
 - Git 面板默认跟随当前会话的工作区；`DSH_DESKTOP_GIT_ROOT` 可覆盖根目录。非 Git 目录会显示明确的空状态。
+- GitHub 集成依赖本机安装并登录 GitHub CLI（`gh auth login`）；创建 PR 前需要先把当前分支推送到 GitHub。
+- 代码内容搜索优先使用 `rg`；系统未安装 ripgrep 时自动回退到 `git grep`，此时只搜索 Git 已跟踪文件。
 - 用量成本基于内置 DeepSeek 率卡估算，不会实时抓取服务端价格。
 - 检查点恢复以“已完成轮次”为边界，通过创建子会话实现，不会截断或覆盖原会话。
 - GitHub Actions 在推送 `v*` tag 后构建 macOS、Windows 和 Linux 安装包并创建 GitHub Release；版本与 tag 必须严格对应。

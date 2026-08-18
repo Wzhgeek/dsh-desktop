@@ -350,7 +350,7 @@ const TURN_RAIL_CSS = `
   padding: 0;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   border: 0;
   outline: 0;
   background: transparent;

@@ -1,3 +1,5 @@
+// Author: Zihan Wang
+// <wangzh011031@163.com>
 /**
  * Embed a dsh `web` tree in-process and return its loopback URL.
  *
@@ -33,6 +35,8 @@ import * as desktopHost from './host/desktop-host.ts'
 import * as appearanceHost from './host/appearance-host.ts'
 import * as usageHost from './host/usage-host.ts'
 import * as gitHost from './host/git-host.ts'
+import * as githubHost from './host/github-host.ts'
+import * as projectHost from './host/project-host.ts'
 import * as scheduleHost from './host/schedule-host.ts'
 import ElectronDirectoryPicker from './host/picker-host.ts'
 
@@ -63,6 +67,23 @@ export interface BootedTree {
   url: string
 }
 
+export function applyDesktopPatchOverrides(patches: PatchOptions[], composedEntries: Array<{ id?: string; config?: unknown }>): void {
+  const agentPresets = composedEntries.find((entry) => entry.id === 'agent-presets')
+  if (agentPresets !== undefined) {
+    patches.push({
+      id: 'agent-presets',
+      config: {
+        ...agentPresets.config as object,
+        roots: [{ path: SHIPPED_PRESET_ROOT, trust: 'system' }],
+      },
+    })
+  }
+  // The shared web profile disables workspace instruction rendering in some
+  // deployments, but desktop's Project memory UI depends on AGENTS.local.md
+  // being injected into every session as workspace instructions.
+  patches.push({ id: 'agent-instructions', disabled: false })
+}
+
 /**
  * Compose and boot the `web` profile in-process: bundle layers, the profile's
  * user layer, and the home-level user layer, with `--port 0` so the OS assigns
@@ -82,16 +103,7 @@ export async function bootDesktopTree(onExit: (code: number) => void = () => {})
   // the path to its shipped presets. Mirror the official dsh launcher overlay
   // so a selected workspace can create its initial `standard` session.
   const composedEntries = composeEntries([patches])
-  const agentPresets = composedEntries.find((entry) => entry.id === 'agent-presets')
-  if (agentPresets !== undefined) {
-    patches.push({
-      id: 'agent-presets',
-      config: {
-        ...agentPresets.config,
-        roots: [{ path: SHIPPED_PRESET_ROOT, trust: 'system' }],
-      },
-    })
-  }
+  applyDesktopPatchOverrides(patches, composedEntries)
   // The shared web profile leaves FTS disabled for deployments that only need
   // title search. Desktop's global palette promises message-content search, so
   // defer opening the derived SQLite index until the first actual query.
@@ -118,6 +130,8 @@ export async function bootDesktopTree(onExit: (code: number) => void = () => {})
     hostCtx.plugin(appearanceHost)
     hostCtx.plugin(usageHost)
     hostCtx.plugin(gitHost)
+    hostCtx.plugin(githubHost)
+    hostCtx.plugin(projectHost)
     hostCtx.plugin(scheduleHost)
     if (process.versions.electron !== undefined) {
       hostCtx.plugin(ElectronDirectoryPicker)

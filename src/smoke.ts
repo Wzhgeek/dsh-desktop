@@ -66,6 +66,15 @@ try {
     const mentionSearch = await fetch(`${url}/api/desktop/files/search?${new URLSearchParams({ cwd: repositoryRoot, q: '', mention: '1' }).toString()}`)
     const mentionSearchBody = await mentionSearch.json() as { items?: { relativePath?: unknown }[] }
     if (mentionSearch.status !== 200 || mentionSearchBody.items?.some(item => item.relativePath === 'example.txt') !== true) throw new Error('blank @ file completion failed')
+    const contentSearch = await fetch(`${url}/api/desktop/workspace/search-content?${new URLSearchParams({ cwd: repositoryRoot, q: 'version' }).toString()}`)
+    const contentSearchBody = await contentSearch.json() as { ok?: unknown; items?: { relativePath?: unknown; line?: unknown }[] }
+    if (contentSearch.status !== 200 || contentSearchBody.ok !== true
+      || contentSearchBody.items?.some(item => item.relativePath === 'example.txt' && item.line === 1) !== true) {
+      throw new Error('workspace content search failed')
+    }
+    const projectRuns = await fetch(`${url}/api/desktop/project/runs?${new URLSearchParams({ cwd: repositoryRoot }).toString()}`)
+    const projectRunsBody = await projectRuns.json() as { ok?: unknown; commands?: unknown[] }
+    if (projectRuns.status !== 200 || projectRunsBody.ok !== true || !Array.isArray(projectRunsBody.commands)) throw new Error('project command detection route failed')
     const schedule = await fetch(`${url}/api/desktop/schedules?sessionId=missing-session`)
     const scheduleBody = await schedule.json() as { ok?: unknown }
     if (schedule.status !== 404 || scheduleBody.ok !== false) throw new Error('schedule route failed')
@@ -267,6 +276,18 @@ try {
     const dirtyPullBody = await dirtyPull.json() as { ok?: unknown; code?: unknown }
     if (dirtyPullBody.ok !== false || dirtyPullBody.code !== 'dirty-worktree') throw new Error('git dirty pull guard failed')
     await writeFile(trackedFile, initialText, 'utf8')
+    const memory = '# Project memory\n\n- Keep smoke tests deterministic.\n'
+    const memoryWrite = await fetch(`${url}/api/desktop/project/memory?${new URLSearchParams({ cwd: repositoryRoot }).toString()}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: memory }),
+    })
+    if ((await memoryWrite.json() as { ok?: unknown }).ok !== true) throw new Error('project memory write failed')
+    const memoryRead = await fetch(`${url}/api/desktop/project/memory?${new URLSearchParams({ cwd: repositoryRoot }).toString()}`)
+    const memoryReadBody = await memoryRead.json() as { ok?: unknown; content?: unknown; sources?: unknown[] }
+    if (memoryReadBody.ok !== true || memoryReadBody.content !== memory || memoryReadBody.sources?.includes('AGENTS.local.md') !== true) {
+      throw new Error('project memory read failed')
+    }
     const nonRepositoryRoot = join(smokeHome, 'not-a-repository')
     await mkdir(nonRepositoryRoot)
     process.env.DSH_DESKTOP_GIT_ROOT = nonRepositoryRoot

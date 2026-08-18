@@ -161,6 +161,10 @@ function createWindow(): BrowserWindow | undefined {
       sendCommand({ command: 'restore-session', sessionId: state.activeSessionId }, win)
     }
   })
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https:\/\//i.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
   void win.loadURL(state.url)
   return win
 }

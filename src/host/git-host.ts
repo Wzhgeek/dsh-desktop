@@ -13,6 +13,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only: ctx.webServer type augmentation.
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import { resolveWorkspaceRoot } from './workspace-root.ts'
+import type { WorkspaceRootResolution } from './workspace-root.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'desktop-git'
@@ -132,11 +134,6 @@ export interface GitCommitFilePatch {
   patch: string
 }
 
-/** Structural slice of the optional `workspaceRegistry` service. */
-interface WorkspaceLike {
-  path: string
-}
-
 /** A settled git child-process run. */
 interface GitRun {
   /** Process exit code, or `1` when the spawn itself failed (e.g. git absent). */
@@ -144,11 +141,6 @@ interface GitRun {
   stdout: string
   stderr: string
 }
-
-/** A request-scoped root accepted by the desktop workspace boundary. */
-type GitRootResolution =
-  | { ok: true; root: string }
-  | { ok: false; error: string }
 
 /** Repository discovery result after applying the workspace boundary. */
 type GitRepositoryResolution =
@@ -215,24 +207,8 @@ async function requireCleanWorktree(root: string, res: ServerResponse, action: s
  * @param requestedRoot - current session cwd supplied by the client.
  * @returns an accepted working root or a workspace-boundary error.
  */
-function resolveGitRoot(ctx: Context, requestedRoot?: string): GitRootResolution {
-  const envRoot = process.env[GIT_ROOT_ENV]
-  if (envRoot !== undefined && envRoot !== '') return { ok: true, root: envRoot }
-  // The `workspaceRegistry` service (@deepseek-ai/dsh-workspace) is composed
-  // into the web profile at runtime but is not a dependency of this package,
-  // so it is read through `ctx.get` and duck-typed to the one field used.
-  const registry = ctx.get('workspaceRegistry') as { list?: () => readonly WorkspaceLike[] } | undefined
-  const workspaces = registry?.list?.() ?? []
-  if (requestedRoot !== undefined) {
-    const workspace = workspaces.find((entry) => entry.path === requestedRoot)
-    if (workspace === undefined) {
-      return { ok: false, error: 'requested workspace is not registered' }
-    }
-    return { ok: true, root: workspace.path }
-  }
-  const workspace = workspaces[0]
-  if (workspace?.path !== undefined) return { ok: true, root: workspace.path }
-  return { ok: true, root: process.cwd() }
+function resolveGitRoot(ctx: Context, requestedRoot?: string): WorkspaceRootResolution {
+  return resolveWorkspaceRoot(ctx, requestedRoot, GIT_ROOT_ENV)
 }
 
 /** Read the optional session-workspace path from one endpoint URL. */

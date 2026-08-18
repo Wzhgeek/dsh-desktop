@@ -27,6 +27,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 // Type-only: pulls the SlotMap merge (ctx.slots) into the program.
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import { GitHubStrip } from './GitHubStrip.tsx'
 
 /**
  * The `conversation.view` slot row, restated locally. ui-conversation declares
@@ -705,6 +706,8 @@ export function GitPanel(props: GitViewProps): JSX.Element {
         </button>
       </header>
 
+      {repository === true ? <GitHubStrip cwd={cwd} /> : null}
+
       {repository === true && newBranchOpen && (
         <form className="dsh-git-new-branch" onSubmit={createBranch}>
           <GitBranch size={14} aria-hidden="true" />
@@ -1170,7 +1173,7 @@ const GIT_PANEL_CSS = `
 .dsh-git-new-branch label { color: var(--git-muted); font-size: 11px; white-space: nowrap; }
 .dsh-git-new-branch input { width: min(280px,32vw); height: 30px; box-sizing: border-box; padding: 5px 8px; border: 1px solid var(--git-border); border-radius: 5px; outline: 0; color: var(--git-text); background: var(--git-surface-raised); font: 11px/18px var(--dsh-desktop-code-font, monospace); }
 .dsh-git-new-branch input:focus { border-color: var(--git-accent); box-shadow: 0 0 0 2px var(--git-accent-soft); }
-.dsh-git-grid { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(380px, 1.08fr) minmax(340px, .92fr); padding-bottom: 126px; box-sizing: border-box; }
+.dsh-git-grid { min-height: 0; flex: 1; display: grid; grid-template-columns: minmax(340px, 1.08fr) minmax(300px, .92fr); padding-bottom: 126px; box-sizing: border-box; }
 .dsh-git-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--git-border); }
 .dsh-git-pane:last-child { border-right: 0; }
 .dsh-git-pane-heading { min-height: 44px; padding: 0 16px; display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 10px; border-bottom: 1px solid var(--git-border); background: var(--dsw-alias-bg-base, #141416); }

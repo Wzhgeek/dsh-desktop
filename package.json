@@ -4,7 +4,7 @@
   "desktopName": "Dsh Desktop.desktop",
   "description": "The DeepSeek Harness GUI as a native Electron desktop app",
   "author": "Wzhgeek",
-  "version": "0.1.0-rc.8",
+  "version": "0.1.0-rc.9",
   "private": true,
   "type": "module",
   "main": "dist/main.js",
