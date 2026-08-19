@@ -32,7 +32,7 @@ import type { MenuItemConstructorOptions } from 'electron'
 import electronUpdater from 'electron-updater'
 import type { Context } from '@deepseek-ai/cordis'
 import { bootDesktopTree } from './boot.ts'
-import { packagedUpdateUnavailableReason } from './desktop-update.ts'
+import { packagedUpdateUnavailableReason, macAppProperlySigned } from './desktop-update.ts'
 import { DesktopPtyHost, parsePtyCreateRequest, parsePtyKillRequest, parsePtyResizeRequest, parsePtyWriteRequest } from './desktop-pty.ts'
 import {
   DESKTOP_ACTIVE_SESSION_CHANNEL,
@@ -645,7 +645,7 @@ function installDesktopUpdater(): void {
     return
   }
   autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.autoInstallOnAppQuit = false
   autoUpdater.allowPrerelease = app.getVersion().includes('-')
   autoUpdater.on('checking-for-update', () => {
     setUpdateState({ phase: 'checking', message: '正在检查 GitHub Releases…' })
@@ -713,13 +713,7 @@ async function downloadDesktopUpdate(): Promise<DesktopUpdateActionResult> {
 
 async function installDesktopUpdate(): Promise<void> {
   state.quitting = true
-  try {
-    await disposeResources()
-    autoUpdater.quitAndInstall(false, true)
-  } catch (error) {
-    state.quitting = false
-    setUpdateState({ phase: 'error', ...optionalAvailableVersion(updateState.availableVersion), message: errorText(error) })
-  }
+  autoUpdater.quitAndInstall(false, true)
 }
 
 function desktopUpdatesSupported(): boolean {
@@ -737,12 +731,14 @@ function updateInstallSnapshot(): {
   platform: NodeJS.Platform
   appImage: boolean
   hasUpdateConfig: boolean
+  properlySigned: boolean
 } {
   return {
     packaged: app.isPackaged,
     platform: process.platform,
     appImage: Boolean(process.env.APPIMAGE),
     hasUpdateConfig: existsSync(join(process.resourcesPath, 'app-update.yml')),
+    properlySigned: process.platform !== 'darwin' || !app.isPackaged || macAppProperlySigned(process.execPath),
   }
 }
 
