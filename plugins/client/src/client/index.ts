@@ -1,3 +1,5 @@
+// Author: Zihan Wang
+// <wangzh011031@163.com>
 /**
  * dsh-desktop client plugin — browser half. Registers the desktop surface
  * extensions into the shared UI slots. This file is the client bundle entry.
@@ -20,9 +22,16 @@ import { register as registerSummary } from './summary/register.ts'
 import { register as registerTurnRail } from './turn-rail/register.ts'
 import { register as registerMentions } from './mentions/register.ts'
 import { register as registerSchedule } from './schedule/register.ts'
+import { register as registerPins } from './pins/register.ts'
+import { register as registerExtensions } from './extensions/register.ts'
+import { register as registerMarket } from './market/register.ts'
+import { register as registerPlugins } from './plugins/register.ts'
+import { register as registerModel } from './model/register.ts'
+import { register as registerVision } from './vision/register.ts'
+import { register as registerTerminal } from './terminal/register.ts'
 
 /** Required client services: the slot registry and locale copy. */
-export const inject = ['slots', 'locale', 'sessions', 'workspaces']
+export const inject = ['slots', 'locale', 'sessions', 'workspaces', 'conversation', 'modelDirectories']
 
 /**
  * Register the desktop extension points.
@@ -40,6 +49,13 @@ export function apply(ctx: ClientContext): void {
   registerExport(ctx)
   registerPalette(ctx)
   registerMentions(ctx)
+  registerPins(ctx)
+  registerExtensions(ctx)
+  registerMarket(ctx)
+  registerPlugins(ctx)
+  registerVision(ctx)
+  registerModel(ctx)
+  registerTerminal(ctx)
   registerSchedule(ctx)
   registerTurnRail(ctx)
   registerSummary(ctx)

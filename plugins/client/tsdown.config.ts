@@ -1,3 +1,5 @@
+// Author: Zihan Wang
+// <wangzh011031@163.com>
 import { defineConfig } from 'tsdown'
 
 /**
@@ -31,7 +33,7 @@ export default defineConfig({
   clean: false,
   deps: {
     neverBundle: PLATFORM_MODULES,
-    alwaysBundle: [/^lucide-react(?:\/|$)/],
+    alwaysBundle: [/^lucide-react(?:\/|$)/, /^@xterm(?:\/|$)/],
     onlyBundle: false,
   },
   define: {

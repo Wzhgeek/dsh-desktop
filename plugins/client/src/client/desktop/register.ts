@@ -1,3 +1,5 @@
+// Author: Zihan Wang
+// <wangzh011031@163.com>
 /**
  * Electron renderer bridge. Keeps desktop-only lifecycle state outside the
  * web runtime while routing commands through the runtime's public services.
@@ -7,16 +9,20 @@
 import type { ClientContext, SessionId, SessionListState } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import { FileOpenerSetting } from './FileOpenerSetting.tsx'
+import { ShortcutSetting } from './ShortcutSetting.tsx'
 import { UpdateSetting } from './UpdateSetting.tsx'
 import type { DesktopFileOpener } from './file-openers.ts'
+import type { DesktopShellApi } from './shell-api.ts'
 import type { DesktopUpdateApi } from './update-api.ts'
 import { installFilePathLinks } from './file-paths.ts'
 import { PALETTE_OPEN_EVENT } from '../palette/CommandPalette.tsx'
+import { openDesktopWorkspace, pickDesktopWorkspace, rememberCurrentWorkspace } from './workspaces.ts'
 
 /** Commands sent by Electron's application menu and startup coordinator. */
 export type DesktopCommand =
-  | { command: 'command-palette' | 'new-session' | 'settings' }
+  | { command: 'command-palette' | 'new-session' | 'settings' | 'open-workspace-picker' | 'toggle-terminal' }
   | { command: 'restore-session'; sessionId: string }
+  | { command: 'open-workspace'; path: string }
 
 /** Payload accepted by the main-process Notification bridge. */
 export interface DesktopNotification {
@@ -27,10 +33,17 @@ export interface DesktopNotification {
 }
 
 /** Minimal API exposed by the context-isolated preload script. */
-export interface DesktopApi extends DesktopUpdateApi {
+export interface DesktopApi extends DesktopUpdateApi, DesktopShellApi {
   notify(payload: DesktopNotification): void
   setActiveSession(sessionId: string | undefined): void
   openPath(request: { path: string; cwd?: string; opener?: DesktopFileOpener }): Promise<{ ok: true } | { ok: false; error: string }>
+  pathForFile(file: File): string
+  createPty(request: { cwd?: string; cols: number; rows: number }): Promise<{ ok: true; id: string } | { ok: false; error: string }>
+  writePty(id: string, data: string): void
+  resizePty(id: string, cols: number, rows: number): void
+  killPty(id: string): void
+  onPtyData(listener: (payload: { id: string; data: string }) => void): () => void
+  onPtyExit(listener: (payload: { id: string }) => void): () => void
 }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -53,9 +66,14 @@ function commandFrom(event: Event): DesktopCommand | undefined {
   if (!(event instanceof CustomEvent) || typeof event.detail !== 'object' || event.detail === null) return undefined
   const detail = event.detail as Record<string, unknown>
   const command = detail.command
-  if (command === 'command-palette' || command === 'new-session' || command === 'settings') return { command }
+  if (command === 'command-palette' || command === 'new-session' || command === 'settings' || command === 'open-workspace-picker' || command === 'toggle-terminal') {
+    return { command }
+  }
   if (command === 'restore-session' && typeof detail.sessionId === 'string' && detail.sessionId.length > 0) {
     return { command, sessionId: detail.sessionId }
+  }
+  if (command === 'open-workspace' && typeof detail.path === 'string' && detail.path.length > 0) {
+    return { command, path: detail.path }
   }
   return undefined
 }
@@ -126,15 +144,27 @@ export function register(ctx: ClientContext): void {
   }, FileOpenerSetting))
   ctx.slots.inject('settings.general.item', () => ctx.slots.register({
     name: 'settings.general.item',
+    id: 'desktop-shortcut',
+    order: 45,
+  }, ShortcutSetting))
+  ctx.slots.inject('settings.general.item', () => ctx.slots.register({
+    name: 'settings.general.item',
     id: 'desktop-updates',
     order: 50,
   }, UpdateSetting))
 
   const disposeFilePathLinks = installFilePathLinks(ctx)
   let pendingRestore: SessionId | undefined
+  let lastRememberedPath: string | undefined
   let previous = ctx.sessions.list.getSnapshot()
   if (previous.phase === 'ready') window.dshDesktop?.setActiveSession(previous.current)
   void checkUsageBudget()
+
+  const rememberIfNeeded = (): void => {
+    const path = rememberCurrentWorkspace(ctx)
+    if (path !== undefined) lastRememberedPath = path
+  }
+  if (previous.phase === 'ready') rememberIfNeeded()
 
   const restoreIfReady = (snapshot: SessionListState): void => {
     if (pendingRestore === undefined || snapshot.phase !== 'ready') return
@@ -157,18 +187,46 @@ export function register(ctx: ClientContext): void {
       case 'command-palette':
         openCommandPalette()
         return
+      case 'open-workspace-picker':
+        void pickDesktopWorkspace(ctx).catch(error => {
+          window.dshDesktop?.notify({
+            title: '无法打开工作区',
+            body: error instanceof Error ? error.message : String(error),
+          })
+        })
+        return
+      case 'open-workspace':
+        void openDesktopWorkspace(ctx, detail.path).catch(error => {
+          window.dshDesktop?.notify({
+            title: '无法打开工作区',
+            body: error instanceof Error ? error.message : String(error),
+          })
+        })
+        return
       case 'restore-session':
         pendingRestore = detail.sessionId as SessionId
         restoreIfReady(ctx.sessions.list.getSnapshot())
+        return
+      case 'toggle-terminal':
+        return
     }
   }
 
   window.addEventListener(COMMAND_EVENT, onCommand)
+  const unsubscribeWorkspaces = ctx.workspaces.list.subscribe(() => {
+    if (lastRememberedPath === undefined) rememberIfNeeded()
+  })
   const unsubscribe = ctx.sessions.list.subscribe(() => {
     const current = ctx.sessions.list.getSnapshot()
     restoreIfReady(current)
     if (current.phase === 'ready') {
       window.dshDesktop?.setActiveSession(current.current)
+      const cwd = current.current === undefined ? undefined : current.byId[current.current]?.cwd
+      if (cwd !== undefined) {
+        if (cwd !== lastRememberedPath) rememberIfNeeded()
+      } else if (lastRememberedPath === undefined) {
+        rememberIfNeeded()
+      }
       const notifications = completionNotifications(previous, current)
       for (const payload of notifications) window.dshDesktop?.notify(payload)
       if (notifications.length > 0) void checkUsageBudget()
@@ -179,6 +237,7 @@ export function register(ctx: ClientContext): void {
   ctx.effect(() => () => {
     disposeFilePathLinks()
     unsubscribe()
+    unsubscribeWorkspaces()
     window.removeEventListener(COMMAND_EVENT, onCommand)
   }, 'desktop-client: Electron lifecycle bridge')
 }

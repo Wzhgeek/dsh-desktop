@@ -1,3 +1,5 @@
+// Author: Zihan Wang
+// <wangzh011031@163.com>
 /** Shared, deliberately small IPC contract for the Electron desktop shell. */
 
 export const DESKTOP_COMMAND_CHANNEL = 'dsh-desktop:command'
@@ -11,14 +13,26 @@ export const DESKTOP_UPDATE_CHECK_CHANNEL = 'dsh-desktop:update-check'
 export const DESKTOP_UPDATE_DOWNLOAD_CHANNEL = 'dsh-desktop:update-download'
 export const DESKTOP_UPDATE_INSTALL_CHANNEL = 'dsh-desktop:update-install'
 export const DESKTOP_UPDATE_OPEN_RELEASES_CHANNEL = 'dsh-desktop:update-open-releases'
+export const DESKTOP_SHELL_GET_STATE_CHANNEL = 'dsh-desktop:shell-get-state'
+export const DESKTOP_SHELL_SET_ACCELERATOR_CHANNEL = 'dsh-desktop:shell-set-accelerator'
+export const DESKTOP_SHELL_REMEMBER_WORKSPACE_CHANNEL = 'dsh-desktop:shell-remember-workspace'
+export const DESKTOP_SHELL_CLEAR_RECENTS_CHANNEL = 'dsh-desktop:shell-clear-recents'
+export const DESKTOP_SHELL_STATE_CHANNEL = 'dsh-desktop:shell-state'
+export const DESKTOP_PTY_CREATE_CHANNEL = 'dsh-desktop:pty-create'
+export const DESKTOP_PTY_WRITE_CHANNEL = 'dsh-desktop:pty-write'
+export const DESKTOP_PTY_RESIZE_CHANNEL = 'dsh-desktop:pty-resize'
+export const DESKTOP_PTY_KILL_CHANNEL = 'dsh-desktop:pty-kill'
+export const DESKTOP_PTY_DATA_CHANNEL = 'dsh-desktop:pty-data'
+export const DESKTOP_PTY_EXIT_CHANNEL = 'dsh-desktop:pty-exit'
 
 /** Explicit local application choices exposed by the renderer. */
 export type DesktopFileOpener = 'system' | 'vscode' | 'cursor' | 'finder' | 'terminal'
 
 /** Commands the native application menu can ask the web application to run. */
 export type DesktopCommandPayload =
-  | { command: 'command-palette' | 'new-session' | 'settings' }
+  | { command: 'command-palette' | 'new-session' | 'settings' | 'open-workspace-picker' | 'toggle-terminal' }
   | { command: 'restore-session'; sessionId: string }
+  | { command: 'open-workspace'; path: string }
 
 /** Native notification request accepted from the trusted renderer. */
 export interface DesktopNotificationPayload {
@@ -66,6 +80,24 @@ export interface DesktopUpdateState {
 
 /** Result returned by update commands that do not terminate the application. */
 export type DesktopUpdateActionResult = { ok: true } | { ok: false; error: string }
+
+/** Parse a native menu command before it is dispatched into the renderer. */
+export function parseDesktopCommand(value: unknown): DesktopCommandPayload | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const candidate = value as Record<string, unknown>
+  if (candidate.command === 'command-palette' || candidate.command === 'new-session'
+    || candidate.command === 'settings' || candidate.command === 'open-workspace-picker'
+    || candidate.command === 'toggle-terminal') {
+    return { command: candidate.command }
+  }
+  if (candidate.command === 'restore-session' && isSessionId(candidate.sessionId)) {
+    return { command: candidate.command, sessionId: candidate.sessionId }
+  }
+  if (candidate.command === 'open-workspace' && isLocalPath(candidate.path)) {
+    return { command: candidate.command, path: candidate.path }
+  }
+  return undefined
+}
 
 export const MAX_SESSION_ID_LENGTH = 256
 export const MAX_NOTIFICATION_TITLE_LENGTH = 120
@@ -151,7 +183,8 @@ function isUpdateVersion(value: unknown): value is string {
     && !/[\u0000-\u001f\u007f]/.test(value)
 }
 
-function isLocalPath(value: unknown): value is string {
+/** Reject empty, oversized, or control-character filesystem paths. */
+export function isLocalPath(value: unknown): value is string {
   return typeof value === 'string'
     && value.trim().length > 0
     && value.length <= MAX_LOCAL_PATH_LENGTH

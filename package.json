@@ -4,7 +4,7 @@
   "desktopName": "Dsh Desktop.desktop",
   "description": "The DeepSeek Harness GUI as a native Electron desktop app",
   "author": "Wzhgeek",
-  "version": "0.1.0-rc.10",
+  "version": "0.1.0-rc.11",
   "private": true,
   "type": "module",
   "main": "dist/main.js",
@@ -110,10 +110,12 @@
     "@dsh-desktop/client": "link:plugins/client",
     "commander": "^15.0.0",
     "electron-updater": "6.8.9",
-    "js-yaml": "^4.2.0"
+    "js-yaml": "^4.2.0",
+    "node-pty": "1.1.0"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
     "electron": "^37.0.0",
     "electron-builder": "26.15.3",

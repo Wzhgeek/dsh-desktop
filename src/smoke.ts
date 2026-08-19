@@ -104,6 +104,43 @@ try {
     const budgetCheck = await fetch(`${url}/api/desktop/usage/budget/check`, { method: 'POST' })
     const budgetCheckBody = await budgetCheck.json() as { notify?: unknown; status?: { periodKey?: unknown } }
     if (budgetCheck.status !== 200 || budgetCheckBody.notify !== false || typeof budgetCheckBody.status?.periodKey !== 'string') throw new Error('usage budget check failed')
+    const market = await fetch(`${url}/api/desktop/market`)
+    const marketBody = await market.json() as { enabled?: unknown; profile?: unknown }
+    if (market.status !== 200 || marketBody.enabled !== false || marketBody.profile !== 'web') {
+      throw new Error('market GET failed')
+    }
+    const marketEnable = await fetch(`${url}/api/desktop/market`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    })
+    const marketEnableBody = await marketEnable.json() as { ok?: unknown; enabled?: unknown }
+    if (marketEnable.status !== 200 || marketEnableBody.ok !== true || marketEnableBody.enabled !== true) {
+      throw new Error('market enable failed')
+    }
+    const marketDisable = await fetch(`${url}/api/desktop/market`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    })
+    const marketDisableBody = await marketDisable.json() as { ok?: unknown; enabled?: unknown }
+    if (marketDisable.status !== 200 || marketDisableBody.enabled !== false) throw new Error('market disable failed')
+    const installed = await fetch(`${url}/api/desktop/market/installed`)
+    const installedBody = await installed.json() as { ok?: unknown; packages?: unknown[]; profile?: unknown }
+    if (installed.status !== 200 || installedBody.ok !== true || !Array.isArray(installedBody.packages) || installedBody.profile !== 'web') {
+      throw new Error('market installed GET failed')
+    }
+    const dropClassify = await fetch(`${url}/api/desktop/drop/classify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ paths: [repositoryRoot, trackedFile] }),
+    })
+    const dropClassifyBody = await dropClassify.json() as { ok?: unknown; items?: { kind?: unknown }[] }
+    if (dropClassify.status !== 200 || dropClassifyBody.ok !== true
+      || dropClassifyBody.items?.some(item => item.kind === 'directory') !== true
+      || dropClassifyBody.items?.some(item => item.kind === 'file') !== true) {
+      throw new Error('drop classify failed')
+    }
     const git = await fetch(`${url}/api/desktop/git/status`)
     const gitBody = await git.json() as {
       ok?: unknown

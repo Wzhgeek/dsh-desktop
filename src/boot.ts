@@ -13,7 +13,7 @@
  * @module @deepseek-ai/dsh-desktop/boot
  */
 
-import { writeFileSync } from 'node:fs'
+import { writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -38,6 +38,11 @@ import * as gitHost from './host/git-host.ts'
 import * as githubHost from './host/github-host.ts'
 import * as projectHost from './host/project-host.ts'
 import * as scheduleHost from './host/schedule-host.ts'
+import * as dropHost from './host/drop-host.ts'
+import * as marketHost from './host/market-host.ts'
+import * as modelPrefHost from './host/model-pref-host.ts'
+import * as visionEngineHost from './host/vision-engine-host.ts'
+import { patchNativeVisionSettings } from './host/vision-models.ts'
 import ElectronDirectoryPicker from './host/picker-host.ts'
 
 /** Diagnostic prefix on load-failure errors. */
@@ -93,6 +98,7 @@ export function applyDesktopPatchOverrides(patches: PatchOptions[], composedEntr
  * @returns the settled context and the canonical loopback URL.
  */
 export async function bootDesktopTree(onExit: (code: number) => void = () => {}): Promise<BootedTree> {
+  ensureNativeVisionSettings()
   healProfilesModuleFallback(INSTALL_ANCHOR)
   const profile = loadProfile(NAME, 'web', INSTALL_ANCHOR)
   writeFileSync(join(profile.dir, PROFILE_ROOT_FILENAME), PROFILE_ROOT_CONFIG)
@@ -133,6 +139,10 @@ export async function bootDesktopTree(onExit: (code: number) => void = () => {})
     hostCtx.plugin(githubHost)
     hostCtx.plugin(projectHost)
     hostCtx.plugin(scheduleHost)
+    hostCtx.plugin(dropHost)
+    hostCtx.plugin(marketHost)
+    hostCtx.plugin(modelPrefHost)
+    hostCtx.plugin(visionEngineHost)
     if (process.versions.electron !== undefined) {
       hostCtx.plugin(ElectronDirectoryPicker)
       // The auto row was disabled above; it normally mounts both faces of the
@@ -150,4 +160,13 @@ export async function bootDesktopTree(onExit: (code: number) => void = () => {})
   const port = ctx.get('webServer')?.port
   if (port === undefined) throw new Error(`${NAME}: webServer service unavailable after boot`)
   return { ctx, url: `http://127.0.0.1:${String(port)}` }
+}
+
+/** Let GPT/Claude/Gemini on custom OpenAI gateways accept image_url. */
+function ensureNativeVisionSettings(): void {
+  const path = join(resolveDshHome(), 'settings.yaml')
+  if (!existsSync(path)) return
+  const original = readFileSync(path, 'utf8')
+  const next = patchNativeVisionSettings(original)
+  if (next !== original) writeFileSync(path, next, 'utf8')
 }

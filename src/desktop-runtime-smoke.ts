@@ -1,3 +1,5 @@
+// Author: Zihan Wang
+// <wangzh011031@163.com>
 /** Hidden Electron smoke for the sandbox preload and its DOM event contract. */
 
 import { fileURLToPath } from 'node:url'
@@ -42,6 +44,29 @@ void app.whenReady().then(async () => {
     if (updaterBridgeTypes !== 'function,function,function,function,function,function') {
       throw new Error('updater bridge was not exposed')
     }
+    const shellBridgeTypes = await win.webContents.executeJavaScript(`[
+      typeof window.dshDesktop?.getShellState,
+      typeof window.dshDesktop?.setShowWindowAccelerator,
+      typeof window.dshDesktop?.rememberWorkspace,
+      typeof window.dshDesktop?.clearRecentWorkspaces,
+      typeof window.dshDesktop?.onShellState,
+    ].join(',')`) as unknown
+    if (shellBridgeTypes !== 'function,function,function,function,function') {
+      throw new Error('shell bridge was not exposed')
+    }
+    const pathForFileType = await win.webContents.executeJavaScript('typeof window.dshDesktop?.pathForFile') as unknown
+    if (pathForFileType !== 'function') throw new Error('pathForFile bridge was not exposed')
+    const ptyBridgeTypes = await win.webContents.executeJavaScript(`[
+      typeof window.dshDesktop?.createPty,
+      typeof window.dshDesktop?.writePty,
+      typeof window.dshDesktop?.resizePty,
+      typeof window.dshDesktop?.killPty,
+      typeof window.dshDesktop?.onPtyData,
+      typeof window.dshDesktop?.onPtyExit,
+    ].join(',')`) as unknown
+    if (ptyBridgeTypes !== 'function,function,function,function,function,function') {
+      throw new Error('pty bridge was not exposed')
+    }
 
     await win.webContents.executeJavaScript(`
       window.__desktopSmoke = { commands: 0, themes: 0, updateStates: 0, fallbackClicks: 0 };
@@ -70,7 +95,7 @@ void app.whenReady().then(async () => {
     `)
     win.webContents.send(DESKTOP_COMMAND_CHANNEL, { command: 'settings' })
     await waitFor(win, 'window.__desktopSmoke.fallbackClicks', 1)
-    console.log('OK: sandbox preload, desktop commands, theme bridge, and updater bridge')
+    console.log('OK: sandbox preload, desktop commands, theme bridge, updater bridge, and shell bridge')
     app.exit(0)
   } catch (error) {
     console.error(error)

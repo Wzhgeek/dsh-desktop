@@ -18,6 +18,7 @@ import {
   app,
   BrowserWindow,
   dialog,
+  globalShortcut,
   ipcMain,
   Menu,
   nativeImage,
@@ -32,12 +33,24 @@ import electronUpdater from 'electron-updater'
 import type { Context } from '@deepseek-ai/cordis'
 import { bootDesktopTree } from './boot.ts'
 import { packagedUpdateUnavailableReason } from './desktop-update.ts'
+import { DesktopPtyHost, parsePtyCreateRequest, parsePtyKillRequest, parsePtyResizeRequest, parsePtyWriteRequest } from './desktop-pty.ts'
 import {
   DESKTOP_ACTIVE_SESSION_CHANNEL,
   DESKTOP_COMMAND_CHANNEL,
   DESKTOP_NOTIFICATION_CHANNEL,
   DESKTOP_OPEN_PATH_CHANNEL,
+  DESKTOP_SHELL_CLEAR_RECENTS_CHANNEL,
+  DESKTOP_SHELL_GET_STATE_CHANNEL,
+  DESKTOP_SHELL_REMEMBER_WORKSPACE_CHANNEL,
+  DESKTOP_SHELL_SET_ACCELERATOR_CHANNEL,
+  DESKTOP_SHELL_STATE_CHANNEL,
   DESKTOP_THEME_CHANNEL,
+  DESKTOP_PTY_CREATE_CHANNEL,
+  DESKTOP_PTY_DATA_CHANNEL,
+  DESKTOP_PTY_EXIT_CHANNEL,
+  DESKTOP_PTY_KILL_CHANNEL,
+  DESKTOP_PTY_RESIZE_CHANNEL,
+  DESKTOP_PTY_WRITE_CHANNEL,
   DESKTOP_UPDATE_CHECK_CHANNEL,
   DESKTOP_UPDATE_DOWNLOAD_CHANNEL,
   DESKTOP_UPDATE_GET_STATE_CHANNEL,
@@ -48,6 +61,17 @@ import {
   parseNotification,
   parseOpenPathRequest,
 } from './desktop-ipc.ts'
+import {
+  DEFAULT_SHOW_WINDOW_ACCELERATOR,
+  formatAcceleratorLabel,
+  normalizeShowWindowAccelerator,
+  parsePersistedDesktopState,
+  parseRememberWorkspaceRequest,
+  recentWorkspaceLabel,
+  rememberRecentWorkspace,
+  type DesktopShellState,
+  type RecentWorkspace,
+} from './desktop-shell.ts'
 import type {
   DesktopCommandPayload,
   DesktopFileOpener,
@@ -64,18 +88,25 @@ const state: {
   ctx: Context | undefined
   url: string | undefined
   win: BrowserWindow | undefined
+  /** Shown while `bootDesktopTree` is still settling (e.g. vision runtime prepare). */
+  bootSplash: BrowserWindow | undefined
   tray: Tray | undefined
   notifications: Set<Notification>
   quitting: boolean
   activeSessionId: string | undefined
+  showWindowAccelerator: string
+  recentWorkspaces: RecentWorkspace[]
 } = {
   ctx: undefined,
   url: undefined,
   win: undefined,
+  bootSplash: undefined,
   tray: undefined,
   notifications: new Set(),
   quitting: false,
   activeSessionId: undefined,
+  showWindowAccelerator: DEFAULT_SHOW_WINDOW_ACCELERATOR,
+  recentWorkspaces: [],
 }
 
 const PRELOAD_PATH = fileURLToPath(new URL('./preload.cjs', import.meta.url))
@@ -89,6 +120,7 @@ let disposePromise: Promise<void> | undefined
 let stateWriteQueue: Promise<void> = Promise.resolve()
 let cachedAppIcon: NativeImage | undefined
 let updateState: DesktopUpdateState = initialUpdateState()
+const ptyHost = new DesktopPtyHost()
 
 // Renaming must not strand Chromium storage and desktop state in a new folder.
 const legacyUserDataPath = join(app.getPath('appData'), LEGACY_USER_DATA_NAME)
@@ -96,6 +128,9 @@ app.setName(APP_NAME)
 app.setPath('userData', legacyUserDataPath)
 app.setPath('sessionData', legacyUserDataPath)
 process.title = APP_NAME
+
+const isPrimaryInstance = app.requestSingleInstanceLock()
+if (!isPrimaryInstance) app.exit(0)
 
 /** Load the vendored Harness icon once; an empty image falls back gracefully. */
 function getAppIcon(): NativeImage | undefined {
@@ -115,8 +150,11 @@ function getAppIcon(): NativeImage | undefined {
  */
 async function disposeResources(): Promise<void> {
   disposePromise ??= (async () => {
+    dismissBootSplash()
+    ptyHost.dispose()
     state.tray?.destroy()
     state.tray = undefined
+    globalShortcut.unregisterAll()
     await stateWriteQueue
     await state.ctx?.fiber.dispose()
   })()
@@ -127,6 +165,57 @@ async function disposeAndQuit(code: number): Promise<void> {
   state.quitting = true
   await disposeResources()
   app.exit(code)
+}
+
+/** Close the temporary boot splash if it is still open. */
+function dismissBootSplash(): void {
+  const splash = state.bootSplash
+  state.bootSplash = undefined
+  if (splash === undefined || splash.isDestroyed()) return
+  splash.destroy()
+}
+
+/**
+ * Show a small native window while the embedded tree is still booting.
+ * Profile plugins such as Vision Toolkit may prepare a Python runtime for
+ * several minutes before `bootDesktopTree` resolves; without this splash the
+ * Dock icon appears live but activate/showWindow cannot open the SPA yet.
+ */
+function showBootSplash(message: string): BrowserWindow {
+  const existing = state.bootSplash
+  if (existing !== undefined && !existing.isDestroyed()) {
+    existing.show()
+    existing.focus()
+    return existing
+  }
+  const icon = getAppIcon()
+  const splash = new BrowserWindow({
+    width: 440,
+    height: 200,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    title: APP_NAME,
+    autoHideMenuBar: true,
+    ...(icon === undefined ? {} : { icon }),
+  })
+  state.bootSplash = splash
+  splash.on('closed', () => {
+    if (state.bootSplash === splash) state.bootSplash = undefined
+  })
+  const body = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>${APP_NAME}</title>
+<style>
+  html,body{margin:0;height:100%;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  background:#111;color:#eee;display:flex;align-items:center;justify-content:center}
+  main{max-width:24rem;padding:1.25rem 1.5rem;text-align:center}
+  h1{margin:0 0 .5rem;font-size:1.05rem;font-weight:600}
+  p{margin:0;opacity:.78}
+</style></head><body><main><h1>${APP_NAME}</h1><p>${message}</p></main></body></html>`
+  void splash.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(body)}`)
+  splash.show()
+  splash.focus()
+  return splash
 }
 
 /** Create the application window and load the embedded GUI. */
@@ -162,6 +251,7 @@ function createWindow(): BrowserWindow | undefined {
   win.webContents.on('did-finish-load', () => {
     sendTheme(win)
     sendUpdateState(win)
+    sendShellState(win)
     if (state.activeSessionId !== undefined) {
       sendCommand({ command: 'restore-session', sessionId: state.activeSessionId }, win)
     }
@@ -176,6 +266,11 @@ function createWindow(): BrowserWindow | undefined {
 
 /** Reveal the existing application window, recreating it only after destruction. */
 function showWindow(): BrowserWindow | undefined {
+  if (state.url === undefined) {
+    showBootSplash('正在启动…首次启用识图插件时可能需要几分钟准备运行时。')
+    return undefined
+  }
+  dismissBootSplash()
   const win = createWindow()
   if (win === undefined) return undefined
   if (win.isMinimized()) win.restore()
@@ -215,7 +310,7 @@ function setUpdateState(next: Omit<DesktopUpdateState, 'currentVersion'>): void 
 
 /** Install native accelerators without claiming OS-global shortcuts. */
 function installApplicationMenu(): void {
-  const send = (command: 'command-palette' | 'new-session' | 'settings') => (): void => {
+  const send = (command: 'command-palette' | 'new-session' | 'settings' | 'open-workspace-picker' | 'toggle-terminal') => (): void => {
     sendCommand({ command })
   }
   const appMenu: MenuItemConstructorOptions = {
@@ -241,6 +336,8 @@ function installApplicationMenu(): void {
       label: '文件',
       submenu: [
         { label: '新会话', accelerator: 'CmdOrCtrl+N', click: send('new-session') },
+        { label: '打开工作区…', accelerator: 'CmdOrCtrl+O', click: send('open-workspace-picker') },
+        { label: '最近打开', submenu: recentWorkspaceMenuItems() },
         ...(process.platform === 'darwin' ? [] : [
           { type: 'separator' as const },
           { label: '设置', accelerator: 'CmdOrCtrl+,', click: send('settings') },
@@ -254,6 +351,7 @@ function installApplicationMenu(): void {
       label: '查看',
       submenu: [
         { label: '命令面板', accelerator: 'CmdOrCtrl+K', click: send('command-palette') },
+        { label: '终端', accelerator: 'Ctrl+`', click: send('toggle-terminal') },
         { type: 'separator' },
         { role: 'reload' },
         { role: 'toggleDevTools' },
@@ -265,7 +363,14 @@ function installApplicationMenu(): void {
         { role: 'togglefullscreen' },
       ],
     },
-    { label: '窗口', submenu: [{ role: 'minimize' }, { role: 'front' }] },
+    {
+      label: '窗口',
+      submenu: [
+        { label: `显示窗口（${formatAcceleratorLabel(state.showWindowAccelerator)}）`, click: () => { showWindow() } },
+        { role: 'minimize' },
+        { role: 'front' },
+      ],
+    },
     ...(process.platform === 'darwin' ? [] : [{
       label: '帮助',
       submenu: [
@@ -277,6 +382,110 @@ function installApplicationMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
+function recentWorkspaceMenuItems(): MenuItemConstructorOptions[] {
+  if (state.recentWorkspaces.length === 0) {
+    return [{ label: '没有最近工程', enabled: false }]
+  }
+  return [
+    ...state.recentWorkspaces.map(entry => ({
+      label: recentWorkspaceLabel(entry),
+      toolTip: entry.path,
+      click: () => { openRecentWorkspace(entry.path) },
+    })),
+    { type: 'separator' as const },
+    { label: '清除最近记录', click: () => { clearRecentWorkspaces() } },
+  ]
+}
+
+function trayMenuTemplate(): MenuItemConstructorOptions[] {
+  const recents = state.recentWorkspaces.slice(0, 5).map(entry => ({
+    label: recentWorkspaceLabel(entry),
+    toolTip: entry.path,
+    click: () => { openRecentWorkspace(entry.path) },
+  }))
+  return [
+    { label: `显示窗口（${formatAcceleratorLabel(state.showWindowAccelerator)}）`, click: () => { showWindow() } },
+    { type: 'separator' },
+    ...(recents.length === 0
+      ? [{ label: '没有最近工程', enabled: false }]
+      : [{ label: '最近打开', enabled: false }, ...recents]),
+    { type: 'separator' },
+    { label: '退出', click: () => { void disposeAndQuit(0) } },
+  ]
+}
+
+function rebuildNativeChrome(): void {
+  installApplicationMenu()
+  state.tray?.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate()))
+  state.tray?.setToolTip(`${APP_NAME}（${formatAcceleratorLabel(state.showWindowAccelerator)} 唤出）`)
+  if (process.platform === 'darwin') {
+    app.dock?.setMenu(Menu.buildFromTemplate(recentWorkspaceMenuItems()))
+  }
+}
+
+function currentShellState(): DesktopShellState {
+  return {
+    accelerator: state.showWindowAccelerator,
+    acceleratorLabel: formatAcceleratorLabel(state.showWindowAccelerator),
+    recents: state.recentWorkspaces,
+  }
+}
+
+function sendShellState(target = state.win): void {
+  if (target === undefined || target.isDestroyed() || target.webContents.isLoadingMainFrame()) return
+  target.webContents.send(DESKTOP_SHELL_STATE_CHANNEL, currentShellState())
+}
+
+function openRecentWorkspace(path: string): void {
+  sendCommand({ command: 'open-workspace', path })
+}
+
+function rememberWorkspace(request: { path: string; title?: string }): void {
+  const next = rememberRecentWorkspace(state.recentWorkspaces, request)
+  const current = state.recentWorkspaces[0]
+  if (current?.path === next[0]?.path && current?.title === next[0]?.title && next.length === state.recentWorkspaces.length) return
+  state.recentWorkspaces = next
+  queueDesktopStateWrite()
+  rebuildNativeChrome()
+  sendShellState()
+}
+
+function clearRecentWorkspaces(): void {
+  if (state.recentWorkspaces.length === 0) return
+  state.recentWorkspaces = []
+  queueDesktopStateWrite()
+  rebuildNativeChrome()
+  sendShellState()
+}
+
+function installShowWindowShortcut(): boolean {
+  globalShortcut.unregisterAll()
+  try {
+    return globalShortcut.register(state.showWindowAccelerator, () => { showWindow() })
+  } catch (error) {
+    console.error('[desktop] could not register show-window shortcut:', error)
+    return false
+  }
+}
+
+function setShowWindowAccelerator(value: string): DesktopUpdateActionResult {
+  const accelerator = normalizeShowWindowAccelerator(value)
+  const previous = state.showWindowAccelerator
+  state.showWindowAccelerator = accelerator
+  if (!installShowWindowShortcut()) {
+    state.showWindowAccelerator = previous
+    if (!installShowWindowShortcut() && previous !== DEFAULT_SHOW_WINDOW_ACCELERATOR) {
+      state.showWindowAccelerator = DEFAULT_SHOW_WINDOW_ACCELERATOR
+      installShowWindowShortcut()
+    }
+    return { ok: false, error: '这个快捷键无法注册，可能已被系统或其他应用占用。' }
+  }
+  queueDesktopStateWrite()
+  rebuildNativeChrome()
+  sendShellState()
+  return { ok: true }
+}
+
 /** Create the status item after ready so packaged builds inherit their app icon. */
 async function createTray(): Promise<void> {
   try {
@@ -285,12 +494,8 @@ async function createTray(): Promise<void> {
     if (process.platform === 'darwin') icon.setTemplateImage(true)
     const tray = new Tray(icon)
     state.tray = tray
-    tray.setToolTip(APP_NAME)
-    tray.setContextMenu(Menu.buildFromTemplate([
-      { label: '显示', click: () => { showWindow() } },
-      { type: 'separator' },
-      { label: '退出', click: () => { void disposeAndQuit(0) } },
-    ]))
+    tray.setToolTip(`${APP_NAME}（${formatAcceleratorLabel(state.showWindowAccelerator)} 唤出）`)
+    tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate()))
     tray.on('click', () => { showWindow() })
   } catch (error) {
     console.error('[desktop] could not create system tray:', error)
@@ -386,6 +591,50 @@ function installIpc(): void {
     } catch (error) {
       return { ok: false, error: errorText(error) }
     }
+  })
+  ipcMain.handle(DESKTOP_SHELL_GET_STATE_CHANNEL, (event): DesktopShellState | { accelerator: string; acceleratorLabel: string; recents: [] } => {
+    return isTrustedRenderer(event.sender)
+      ? currentShellState()
+      : { accelerator: DEFAULT_SHOW_WINDOW_ACCELERATOR, acceleratorLabel: formatAcceleratorLabel(DEFAULT_SHOW_WINDOW_ACCELERATOR), recents: [] }
+  })
+  ipcMain.handle(DESKTOP_SHELL_SET_ACCELERATOR_CHANNEL, (event, value: unknown): DesktopUpdateActionResult => {
+    if (!isTrustedRenderer(event.sender)) return { ok: false, error: 'Untrusted renderer.' }
+    if (typeof value !== 'string') return { ok: false, error: 'Invalid shortcut.' }
+    return setShowWindowAccelerator(value)
+  })
+  ipcMain.on(DESKTOP_SHELL_REMEMBER_WORKSPACE_CHANNEL, (event, value: unknown) => {
+    if (!isTrustedRenderer(event.sender)) return
+    const request = parseRememberWorkspaceRequest(value)
+    if (request !== undefined) rememberWorkspace(request)
+  })
+  ipcMain.on(DESKTOP_SHELL_CLEAR_RECENTS_CHANNEL, (event) => {
+    if (isTrustedRenderer(event.sender)) clearRecentWorkspaces()
+  })
+  ipcMain.handle(DESKTOP_PTY_CREATE_CHANNEL, (event, value: unknown) => {
+    if (!isTrustedRenderer(event.sender)) return { ok: false, error: 'Untrusted renderer.' }
+    const request = parsePtyCreateRequest(value)
+    if (request === undefined) return { ok: false, error: 'Invalid terminal request.' }
+    const sender = event.sender
+    return ptyHost.create(
+      request,
+      (id, data) => { if (!sender.isDestroyed()) sender.send(DESKTOP_PTY_DATA_CHANNEL, { id, data }) },
+      (id) => { if (!sender.isDestroyed()) sender.send(DESKTOP_PTY_EXIT_CHANNEL, { id }) },
+    )
+  })
+  ipcMain.on(DESKTOP_PTY_WRITE_CHANNEL, (event, value: unknown) => {
+    if (!isTrustedRenderer(event.sender)) return
+    const request = parsePtyWriteRequest(value)
+    if (request !== undefined) ptyHost.write(request)
+  })
+  ipcMain.on(DESKTOP_PTY_RESIZE_CHANNEL, (event, value: unknown) => {
+    if (!isTrustedRenderer(event.sender)) return
+    const request = parsePtyResizeRequest(value)
+    if (request !== undefined) ptyHost.resize(request)
+  })
+  ipcMain.on(DESKTOP_PTY_KILL_CHANNEL, (event, value: unknown) => {
+    if (!isTrustedRenderer(event.sender)) return
+    const request = parsePtyKillRequest(value)
+    if (request !== undefined) ptyHost.kill(request)
   })
 }
 
@@ -585,25 +834,27 @@ async function openTerminal(directory: string): Promise<void> {
   })
 }
 
-interface PersistedDesktopState { activeSessionId?: string }
-
 function desktopStatePath(): string {
   return join(app.getPath('userData'), STATE_FILE_NAME)
 }
 
 async function readDesktopState(): Promise<void> {
   try {
-    const parsed = JSON.parse(await readFile(desktopStatePath(), 'utf8')) as unknown
-    if (typeof parsed !== 'object' || parsed === null) return
-    const activeSessionId = (parsed as Record<string, unknown>).activeSessionId
-    if (isSessionId(activeSessionId)) state.activeSessionId = activeSessionId
+    const parsed = parsePersistedDesktopState(JSON.parse(await readFile(desktopStatePath(), 'utf8')) as unknown)
+    if (parsed.activeSessionId !== undefined) state.activeSessionId = parsed.activeSessionId
+    if (parsed.showWindowAccelerator !== undefined) state.showWindowAccelerator = parsed.showWindowAccelerator
+    if (parsed.recentWorkspaces !== undefined) state.recentWorkspaces = parsed.recentWorkspaces
   } catch {
     // First launch and malformed state both safely start without a restored session.
   }
 }
 
 function queueDesktopStateWrite(): void {
-  const snapshot: PersistedDesktopState = state.activeSessionId === undefined ? {} : { activeSessionId: state.activeSessionId }
+  const snapshot = parsePersistedDesktopState({
+    ...(state.activeSessionId === undefined ? {} : { activeSessionId: state.activeSessionId }),
+    showWindowAccelerator: state.showWindowAccelerator,
+    recentWorkspaces: state.recentWorkspaces,
+  })
   stateWriteQueue = stateWriteQueue.then(async () => {
     const path = desktopStatePath()
     const temporaryPath = `${path}.${process.pid}.tmp`
@@ -611,23 +862,32 @@ function queueDesktopStateWrite(): void {
     await writeFile(temporaryPath, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8')
     await rename(temporaryPath, path)
   }).catch((error: unknown) => {
-    console.error('[desktop] could not persist active session:', error)
+    console.error('[desktop] could not persist desktop state:', error)
   })
 }
 
 void app.whenReady().then(async () => {
+  if (!isPrimaryInstance) return
   nativeTheme.themeSource = 'system'
   const icon = getAppIcon()
   if (process.platform === 'darwin' && icon !== undefined) app.dock?.setIcon(icon)
   installIpc()
   installDesktopUpdater()
-  installApplicationMenu()
   await readDesktopState()
+  installApplicationMenu()
+  if (!installShowWindowShortcut() && state.showWindowAccelerator !== DEFAULT_SHOW_WINDOW_ACCELERATOR) {
+    state.showWindowAccelerator = DEFAULT_SHOW_WINDOW_ACCELERATOR
+    installShowWindowShortcut()
+  }
+  showBootSplash('正在启动…首次启用识图插件时可能需要几分钟准备运行时。')
   try {
+    console.info('[desktop] booting embedded web tree…')
     const { ctx, url } = await bootDesktopTree((code) => { void disposeAndQuit(code) })
     state.ctx = ctx
     state.url = url
+    console.info(`[desktop] web tree ready: ${url}`)
   } catch (error) {
+    dismissBootSplash()
     console.error(error)
     const message = error instanceof Error ? error.message : String(error)
     dialog.showErrorBox('Dsh Desktop 无法启动', message)
@@ -636,7 +896,14 @@ void app.whenReady().then(async () => {
   }
   showWindow()
   await createTray()
+  if (process.platform === 'darwin') {
+    app.dock?.setMenu(Menu.buildFromTemplate(recentWorkspaceMenuItems()))
+  }
   nativeTheme.on('updated', () => { sendTheme() })
+})
+
+app.on('second-instance', () => {
+  showWindow()
 })
 
 // macOS: a dock click with no open window reopens one.

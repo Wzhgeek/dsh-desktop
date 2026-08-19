@@ -1,12 +1,18 @@
+// Author: Zihan Wang
+// <wangzh011031@163.com>
 /** Global Cmd+K surface for commands, sessions, indexed content, and files. */
 
 import Download from 'lucide-react/dist/esm/icons/download.mjs'
 import File from 'lucide-react/dist/esm/icons/file.mjs'
 import FileText from 'lucide-react/dist/esm/icons/file-text.mjs'
+import Folder from 'lucide-react/dist/esm/icons/folder.mjs'
+import FolderOpen from 'lucide-react/dist/esm/icons/folder-open.mjs'
 import FolderSearch from 'lucide-react/dist/esm/icons/folder-search.mjs'
 import GitBranch from 'lucide-react/dist/esm/icons/git-branch.mjs'
 import MessageSquare from 'lucide-react/dist/esm/icons/message-square.mjs'
+import Pin from 'lucide-react/dist/esm/icons/pin.mjs'
 import Plus from 'lucide-react/dist/esm/icons/plus.mjs'
+import ScanEye from 'lucide-react/dist/esm/icons/scan-eye.mjs'
 import Search from 'lucide-react/dist/esm/icons/search.mjs'
 import Settings from 'lucide-react/dist/esm/icons/settings.mjs'
 import Terminal from 'lucide-react/dist/esm/icons/terminal.mjs'
@@ -14,12 +20,18 @@ import WalletCards from 'lucide-react/dist/esm/icons/wallet-cards.mjs'
 import CalendarClock from 'lucide-react/dist/esm/icons/calendar-clock.mjs'
 import Code2 from 'lucide-react/dist/esm/icons/code-2.mjs'
 import Hammer from 'lucide-react/dist/esm/icons/hammer.mjs'
+import Store from 'lucide-react/dist/esm/icons/store.mjs'
 import type { ClientContext, SessionId, SessionListState } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { exportCurrentSession } from '../export/session-export.ts'
 import { openDesktopPath } from '../desktop/file-openers.ts'
+import { EMPTY_SHELL_STATE } from '../desktop/shell-api.ts'
+import type { DesktopShellState } from '../desktop/shell-api.ts'
+import { openDesktopWorkspace, pickDesktopWorkspace } from '../desktop/workspaces.ts'
+import { isPinned, subscribePins, togglePin } from '../pins/store.ts'
 import { SCHEDULE_OPEN_EVENT } from '../schedule/events.ts'
+import { addTerminal } from '../terminal/store.ts'
 
 export const PALETTE_OPEN_EVENT = 'dsh-desktop:palette-open'
 
@@ -39,8 +51,8 @@ interface DesktopContentSearchResult {
 
 type PaletteItem = {
   id: string
-  group: '命令' | '会话' | '内容' | '代码' | '文件'
-  kind: 'command' | 'session' | 'content' | 'code' | 'file'
+  group: '命令' | '工程' | '会话' | '内容' | '代码' | '文件'
+  kind: 'command' | 'workspace' | 'session' | 'content' | 'code' | 'file'
   label: string
   detail?: string
   keywords?: string
@@ -68,6 +80,8 @@ export function CommandPalette({ ctx, useSessions }: CommandPaletteProps): JSX.E
   const [contentHits, setContentHits] = useState<Array<{ sessionId: SessionId; snippet: string }>>([])
   const [codeHits, setCodeHits] = useState<DesktopContentSearchResult[]>([])
   const [fileHits, setFileHits] = useState<DesktopFileSearchResult[]>([])
+  const [shell, setShell] = useState<DesktopShellState>(EMPTY_SHELL_STATE)
+  const [pinRev, setPinRev] = useState(0)
   const [searching, setSearching] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
   const input = useRef<HTMLInputElement>(null)
@@ -98,10 +112,25 @@ export function CommandPalette({ ctx, useSessions }: CommandPaletteProps): JSX.E
 
   useEffect(() => {
     if (!open) return
+    const api = window.dshDesktop
+    if (api === undefined) return
+    void api.getShellState().then(setShell).catch(() => {})
+    return api.onShellState(setShell)
+  }, [open])
+
+  useEffect(() => subscribePins(() => { setPinRev(value => value + 1) }), [])
+
+  useEffect(() => {
+    if (!open) return
     requestAnimationFrame(() => { input.current?.focus() })
   }, [open])
 
   const current = sessions.current === undefined ? undefined : sessions.byId[sessions.current]
+  const currentSessionPinned = sessions.current !== undefined && isPinned('session', sessions.current)
+  const currentWorkspace = current?.cwd === undefined
+    ? undefined
+    : ctx.workspaces.list.getSnapshot().items.find(item => item.path === current.cwd)
+  const currentWorkspacePinned = currentWorkspace !== undefined && isPinned('workspace', currentWorkspace.workspaceId)
   useEffect(() => {
     if (!open || deferredQuery.length < 2) {
       setContentHits([])
@@ -154,12 +183,54 @@ export function CommandPalette({ ctx, useSessions }: CommandPaletteProps): JSX.E
       action: () => { ctx.workspaces.startSession() },
     },
     {
-      id: 'session-command', label: '会话命令', detail: '打开 / 命令列表', keywords: 'slash command terminal 命令',
+      id: 'open-workspace', label: '打开工作区…', detail: '选择一个本地目录', keywords: 'open workspace folder project 打开 工作区 工程',
+      action: () => pickDesktopWorkspace(ctx),
+    },
+    {
+      id: 'pin-session',
+      label: currentSessionPinned ? '取消置顶当前会话' : '置顶当前会话',
+      detail: '固定到侧栏置顶区',
+      keywords: 'pin session 置顶 会话',
+      action: () => {
+        if (sessions.current !== undefined) togglePin('session', sessions.current)
+      },
+    },
+    {
+      id: 'pin-workspace',
+      label: currentWorkspacePinned ? '取消置顶当前项目' : '置顶当前项目',
+      detail: '固定整个工作区到侧栏置顶区',
+      keywords: 'pin workspace project 置顶 项目 工作区',
+      action: () => {
+        const cwd = current?.cwd
+        const workspace = cwd === undefined
+          ? undefined
+          : ctx.workspaces.list.getSnapshot().items.find(item => item.path === cwd)
+        if (workspace !== undefined) togglePin('workspace', workspace.workspaceId)
+      },
+    },
+    {
+      id: 'terminal', label: '打开终端', detail: '应用内终端，可同时开多个，可放在下侧或右侧', keywords: 'terminal shell pty 终端 控制台 新建',
+      action: () => { addTerminal() },
+    },
+    {
+      id: 'session-command', label: '会话命令', detail: '打开 / 命令列表', keywords: 'slash command 命令',
       action: openSessionCommandPicker,
     },
     {
       id: 'settings', label: '打开设置', detail: '模型、插件与外观', keywords: 'settings preferences 设置 偏好',
       action: openSettings,
+    },
+    {
+      id: 'vision', label: '打开识图设置', detail: '给纯文本模型外挂读图，填写 Gemini 或兼容接口的 key', keywords: 'vision ocr image 识图 读图 OCR 图片 gemini key',
+      action: openVisionSettings,
+    },
+    {
+      id: 'plugin-market', label: '打开插件市场', detail: '浏览精选插件并安装', keywords: 'plugin market store 插件 市场 扩展',
+      action: openPluginMarket,
+    },
+    {
+      id: 'plugin-installed', label: '打开插件管理', detail: '启用、停用或卸载已安装插件', keywords: 'plugin manage uninstall disable 插件 管理 卸载 停用',
+      action: openPluginInstalled,
     },
     {
       id: 'usage', label: '查看 Usage', detail: '请求、Tokens、成本与预算', keywords: 'usage cost token budget 用量 成本 预算',
@@ -185,13 +256,24 @@ export function CommandPalette({ ctx, useSessions }: CommandPaletteProps): JSX.E
       id: 'export-text', label: '导出为纯文本', detail: '完整当前会话', keywords: 'export download text txt 导出 文本',
       action: () => exportCurrentSession(ctx, 'text'),
     },
-  ], [ctx])
+  ], [ctx, current, currentSessionPinned, currentWorkspacePinned, pinRev, sessions.current])
 
   const items = useMemo<PaletteItem[]>(() => {
     const needle = deferredQuery.toLocaleLowerCase()
     const commands = staticCommands
       .filter(command => needle === '' || `${command.label} ${command.detail} ${command.keywords}`.toLocaleLowerCase().includes(needle))
       .map(command => ({ ...command, group: '命令' as const, kind: 'command' as const }))
+    const workspaces = shell.recents
+      .filter(entry => needle === '' || `${entry.title ?? ''} ${entry.path}`.toLocaleLowerCase().includes(needle))
+      .slice(0, 8)
+      .map(entry => ({
+        id: `workspace:${entry.path}`,
+        group: '工程' as const,
+        kind: 'workspace' as const,
+        label: entry.title?.trim() || entry.path.split(/[\\/]/).at(-1) || entry.path,
+        detail: entry.path,
+        action: () => openDesktopWorkspace(ctx, entry.path),
+      }))
     const titleMatches = sessions.ids
       .map(id => sessions.byId[id])
       .filter((summary): summary is NonNullable<typeof summary> => summary !== undefined && !summary.blank)
@@ -239,8 +321,8 @@ export function CommandPalette({ ctx, useSessions }: CommandPaletteProps): JSX.E
         if (result.ok === false) throw new Error(result.error)
       },
     }))
-    return [...commands, ...titleMatches, ...content, ...code, ...files]
-  }, [codeHits, contentHits, ctx.sessions, deferredQuery, fileHits, sessions.byId, sessions.ids, staticCommands])
+    return [...commands, ...workspaces, ...titleMatches, ...content, ...code, ...files]
+  }, [codeHits, contentHits, ctx, deferredQuery, fileHits, sessions.byId, sessions.ids, shell.recents, staticCommands])
 
   useEffect(() => { setActiveIndex(0) }, [deferredQuery])
   useEffect(() => { setActiveIndex(index => Math.min(index, Math.max(0, items.length - 1))) }, [items.length])
@@ -319,7 +401,7 @@ export function CommandPalette({ ctx, useSessions }: CommandPaletteProps): JSX.E
 }
 
 function groupItems(items: PaletteItem[]): Array<{ name: PaletteItem['group']; items: PaletteItem[] }> {
-  const order: PaletteItem['group'][] = ['命令', '会话', '内容', '代码', '文件']
+  const order: PaletteItem['group'][] = ['命令', '工程', '会话', '内容', '代码', '文件']
   return order.flatMap(name => {
     const grouped = items.filter(item => item.group === name)
     return grouped.length === 0 ? [] : [{ name, items: grouped }]
@@ -328,11 +410,16 @@ function groupItems(items: PaletteItem[]): Array<{ name: PaletteItem['group']; i
 
 function iconFor(item: PaletteItem): JSX.Element {
   if (item.kind === 'session') return <MessageSquare size={16} />
+  if (item.kind === 'workspace') return <Folder size={16} />
   if (item.kind === 'content') return <FileText size={16} />
   if (item.kind === 'code') return <Code2 size={16} />
   if (item.kind === 'file') return <File size={16} />
   if (item.id === 'new-session') return <Plus size={16} />
+  if (item.id === 'open-workspace') return <FolderOpen size={16} />
+  if (item.id.startsWith('pin-')) return <Pin size={16} />
   if (item.id === 'settings') return <Settings size={16} />
+  if (item.id === 'plugin-market' || item.id === 'plugin-installed') return <Store size={16} />
+  if (item.id === 'vision') return <ScanEye size={16} />
   if (item.id === 'usage') return <WalletCards size={16} />
   if (item.id === 'git') return <GitBranch size={16} />
   if (item.id === 'project') return <Hammer size={16} />
@@ -350,6 +437,34 @@ function openUsage(): void {
   window.setTimeout(() => {
     const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find(entry => entry.textContent?.trim() === 'Usage')
     button?.click()
+  }, 0)
+}
+
+function openVisionSettings(): void {
+  openSettings()
+  window.setTimeout(() => {
+    const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find(entry => entry.textContent?.trim() === '识图')
+    button?.click()
+  }, 0)
+}
+
+function openPluginMarket(): void {
+  openSettings()
+  window.setTimeout(() => {
+    const button = [...document.querySelectorAll<HTMLButtonElement>('button')].find(entry => entry.textContent?.trim() === '插件市场')
+    button?.click()
+  }, 0)
+}
+
+function openPluginInstalled(): void {
+  openSettings()
+  window.setTimeout(() => {
+    const section = [...document.querySelectorAll<HTMLButtonElement>('button')].find(entry => entry.textContent?.trim() === '插件')
+    section?.click()
+    window.setTimeout(() => {
+      const tab = [...document.querySelectorAll<HTMLButtonElement>('button')].find(entry => entry.textContent?.trim() === '已安装')
+      tab?.click()
+    }, 0)
   }, 0)
 }
 
