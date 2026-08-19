@@ -87,6 +87,28 @@ export function applyDesktopPatchOverrides(patches: PatchOptions[], composedEntr
   // deployments, but desktop's Project memory UI depends on AGENTS.local.md
   // being injected into every session as workspace instructions.
   patches.push({ id: 'agent-instructions', disabled: false })
+  // Desktop routes text-only models through ModLens twins via the composer
+  // 识图 switch (see plugins/client vision/). Leave visionProvider on so
+  // those twins exist, but disable paste-to-path: it hijacks clipboard pastes
+  // based on the visible model label and blocks native image attachments even
+  // when 识图 has already wrapped the route.
+  if (modlensPresent(composedEntries)) {
+    const previous = composedEntries.find(entry => entry.id === 'modlens')?.config
+    const previousRecord = typeof previous === 'object' && previous !== null
+      ? previous as Record<string, unknown>
+      : {}
+    patches.push({
+      id: 'modlens',
+      config: {
+        ...previousRecord,
+        pasteToPath: false,
+      },
+    })
+  }
+}
+
+function modlensPresent(composedEntries: Array<{ id?: string }>): boolean {
+  return composedEntries.some(entry => entry.id === 'modlens')
 }
 
 /**

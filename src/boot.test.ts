@@ -18,3 +18,11 @@ test('adds the shipped preset root override when agent presets exist', () => {
   assert.equal(Array.isArray((presetPatch?.config as { roots?: unknown[] } | undefined)?.roots), true)
   assert.equal(((presetPatch?.config as { roots?: Array<{ path: string; trust: string }> }).roots?.[0]?.trust), 'system')
 })
+
+test('disables modlens paste-to-path so composer 识图 can attach images', () => {
+  const patches: PatchOptions[] = []
+  applyDesktopPatchOverrides(patches, [{ id: 'modlens', config: { pasteDir: '/tmp' } }])
+  const modlensPatch = patches.find(patch => patch.id === 'modlens')
+  assert.equal((modlensPatch?.config as { pasteToPath?: boolean }).pasteToPath, false)
+  assert.equal((modlensPatch?.config as { pasteDir?: string }).pasteDir, '/tmp')
+})
