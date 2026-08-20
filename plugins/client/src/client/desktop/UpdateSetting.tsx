@@ -90,7 +90,7 @@ type UpdateAction =
   | { kind: 'disabled'; label: string }
 
 export function primaryAction(state: DesktopUpdateState): UpdateAction {
-  if (state.phase === 'unsupported') return { kind: 'releases', label: '查看发布页' }
+  if (state.phase === 'unsupported') return { kind: 'releases', label: '下载安装包' }
   if (state.phase === 'available') return { kind: 'download', label: '下载更新' }
   if (state.phase === 'downloaded') return { kind: 'install', label: '重启并安装' }
   if (state.phase === 'checking') return { kind: 'disabled', label: '检查中…' }

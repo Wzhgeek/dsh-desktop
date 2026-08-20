@@ -581,6 +581,10 @@ function installIpc(): void {
   })
   ipcMain.on(DESKTOP_UPDATE_INSTALL_CHANNEL, (event) => {
     if (!isTrustedRenderer(event.sender) || updateState.phase !== 'downloaded') return
+    if (!desktopUpdatesSupported()) {
+      void shell.openExternal(RELEASES_URL)
+      return
+    }
     void installDesktopUpdate()
   })
   ipcMain.handle(DESKTOP_UPDATE_OPEN_RELEASES_CHANNEL, async (event): Promise<DesktopUpdateActionResult> => {
@@ -712,8 +716,40 @@ async function downloadDesktopUpdate(): Promise<DesktopUpdateActionResult> {
 }
 
 async function installDesktopUpdate(): Promise<void> {
+  // Unsigned / adhoc macOS builds cannot be replaced by Squirrel.Mac; opening
+  // Releases avoids the white-screen path where quitAndInstall leaves a live
+  // window after the update helper fails.
+  if (!desktopUpdatesSupported()) {
+    setUpdateState(initialUpdateState())
+    try { await shell.openExternal(RELEASES_URL) } catch { /* ignore */ }
+    return
+  }
   state.quitting = true
-  autoUpdater.quitAndInstall(false, true)
+  try {
+    autoUpdater.quitAndInstall(false, true)
+  } catch (error) {
+    state.quitting = false
+    setUpdateState({
+      phase: 'error',
+      ...optionalAvailableVersion(updateState.availableVersion),
+      message: errorText(error),
+    })
+    try { await shell.openExternal(RELEASES_URL) } catch { /* ignore */ }
+    return
+  }
+  // If Squirrel does not exit the process, roll back so the UI stays usable.
+  setTimeout(() => {
+    if (!state.quitting) return
+    state.quitting = false
+    setUpdateState({
+      phase: 'error',
+      ...optionalAvailableVersion(updateState.availableVersion),
+      message: '自动安装未完成。请从 GitHub Releases 下载 DMG，拖到「应用程序」后重新打开。',
+      checkedAt: Date.now(),
+    })
+    showWindow()
+    void shell.openExternal(RELEASES_URL)
+  }, 4_000).unref()
 }
 
 function desktopUpdatesSupported(): boolean {
